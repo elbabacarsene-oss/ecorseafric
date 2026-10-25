@@ -1,0 +1,348 @@
+// ECORSE AFRIC BTP MANAGER 360 – modèle de données (étape 1 : socle)
+// Montants en francs CFA (XOF), stockés en Decimal(18,0) : le XOF n'a pas de subdivision utilisée.
+// Les dates sont stockées en UTC ; Africa/Dakar = UTC+0 sans heure d'été.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────── Entreprise ─────────────
+
+model Entreprise {
+  id            Int      @id @default(1)
+  raisonSociale String   @default("ECORSE AFRIC")
+  formeJuridique String?
+  ninea         String?
+  rccm          String?
+  adresse       String?
+  ville         String?  @default("Dakar")
+  telephone     String?
+  email         String?
+  siteWeb       String?
+  logo          Bytes?
+  logoMime      String?
+  updatedAt     DateTime @updatedAt
+}
+
+// ───────────── Sécurité ─────────────
+
+enum Role {
+  ADMIN
+  DIRECTEUR_GENERAL
+  DIRECTEUR_TECHNIQUE
+  DIRECTEUR_FINANCIER
+  CHEF_PROJET
+  CONDUCTEUR_TRAVAUX
+  CHEF_CHANTIER
+  METREUR
+  COMPTABLE
+  MAGASINIER
+  RESPONSABLE_QHSE
+  ACHETEUR
+  // Rôles externes (portail des intervenants)
+  CLIENT
+  ARCHITECTE
+  BUREAU_ETUDES
+  BUREAU_CONTROLE
+  SOUS_TRAITANT
+  FOURNISSEUR
+}
+
+model Utilisateur {
+  id                String    @id @default(cuid())
+  email             String    @unique
+  nom               String
+  prenom            String
+  telephone         String?
+  passwordHash      String
+  role              Role
+  actif             Boolean   @default(true)
+  doitChangerMdp    Boolean   @default(true)
+  tentativesEchouees Int      @default(0)
+  verrouilleJusqua  DateTime?
+  derniereConnexion DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  intervenantId String?      @unique
+  intervenant   Intervenant? @relation(fields: [intervenantId], references: [id])
+
+  sessions          Session[]
+  journal           JournalAudit[]
+  avenantsPrepares  Avenant[]  @relation("AvenantPreparePar")
+  avenantsApprouves Avenant[]  @relation("AvenantApprouvePar")
+  evenements        EvenementChantier[]
+}
+
+model Session {
+  id         String      @id // empreinte SHA-256 du jeton ; le jeton brut n'est jamais stocké
+  userId     String
+  user       Utilisateur @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt  DateTime
+  createdAt  DateTime    @default(now())
+  lastSeenAt DateTime    @default(now())
+  ip         String?
+  userAgent  String?
+
+  @@index([userId])
+}
+
+model JournalAudit {
+  id        BigInt       @id @default(autoincrement())
+  createdAt DateTime     @default(now())
+  userId    String?
+  user      Utilisateur? @relation(fields: [userId], references: [id])
+  action    String
+  entite    String
+  entiteId  String?
+  details   Json?
+  ip        String?
+
+  @@index([entite, entiteId])
+  @@index([createdAt])
+}
+
+// ───────────── Parties prenantes ─────────────
+
+enum CategorieIntervenant {
+  MAITRISE_OUVRAGE
+  MAITRISE_OEUVRE
+  PERSONNEL_INTERNE
+  INTERVENANT_EXTERNE
+}
+
+enum TypeIntervenant {
+  // A. Maîtrise d'ouvrage
+  CLIENT_PARTICULIER
+  PROMOTEUR
+  ENTREPRISE
+  ADMINISTRATION
+  INVESTISSEUR
+  // B. Maîtrise d'œuvre
+  ARCHITECTE
+  INGENIEUR
+  BUREAU_ETUDES
+  ECONOMISTE
+  GEOMETRE
+  LABORATOIRE
+  BUREAU_CONTROLE
+  // C. Personnel interne
+  DIRECTEUR
+  DIRECTEUR_TECHNIQUE
+  DIRECTEUR_FINANCIER
+  CONDUCTEUR_TRAVAUX
+  CHEF_PROJET
+  CHEF_CHANTIER
+  METREUR
+  COMPTABLE
+  MAGASINIER
+  RESPONSABLE_QHSE
+  ACHETEUR
+  OUVRIER
+  // D. Intervenants externes
+  SOUS_TRAITANT
+  FOURNISSEUR
+  LOUEUR_MATERIEL
+  TRANSPORTEUR
+  CONSULTANT
+  ASSUREUR
+  BANQUE
+  ORGANISME_CONTROLE
+}
+
+model Intervenant {
+  id            String               @id @default(cuid())
+  code          String               @unique
+  categorie     CategorieIntervenant
+  type          TypeIntervenant
+  personneMorale Boolean             @default(false)
+  nom           String // raison sociale si personne morale
+  prenom        String?
+  fonction      String?
+  entreprise    String?
+  telephone     String?
+  telephone2    String?
+  email         String?
+  adresse       String?
+  ville         String?
+  region        Region?
+  ninea         String?
+  rccm          String?
+  notes         String?
+  actif         Boolean              @default(true)
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  utilisateur   Utilisateur?
+  affectations  AffectationChantier[]
+
+  chantiersClient          Chantier[] @relation("ChantierClient")
+  chantiersMaitreOuvrage   Chantier[] @relation("ChantierMOA")
+  chantiersArchitecte      Chantier[] @relation("ChantierArchitecte")
+  chantiersBureauEtudes    Chantier[] @relation("ChantierBET")
+  chantiersBureauControle  Chantier[] @relation("ChantierBC")
+  chantiersConducteur      Chantier[] @relation("ChantierConducteur")
+  chantiersChefChantier    Chantier[] @relation("ChantierChef")
+  chantiersQhse            Chantier[] @relation("ChantierQHSE")
+
+  @@index([categorie, type])
+  @@index([nom])
+}
+
+// ───────────── Chantiers ─────────────
+
+enum Region {
+  DAKAR
+  DIOURBEL
+  FATICK
+  KAFFRINE
+  KAOLACK
+  KEDOUGOU
+  KOLDA
+  LOUGA
+  MATAM
+  SAINT_LOUIS
+  SEDHIOU
+  TAMBACOUNDA
+  THIES
+  ZIGUINCHOR
+}
+
+enum TypeProjet {
+  BATIMENT
+  IMMEUBLE
+  MAISON
+  ROUTE
+  TERRASSEMENT
+  ASSAINISSEMENT
+  VRD
+  CLOTURE
+  REHABILITATION
+  DEMOLITION
+  GENIE_CIVIL
+  AMENAGEMENT_EXTERIEUR
+}
+
+enum StatutChantier {
+  EN_PREPARATION
+  EN_COURS
+  SUSPENDU
+  RECEPTION_PROVISOIRE
+  RECEPTION_DEFINITIVE
+  CLOTURE
+  ANNULE
+}
+
+model Chantier {
+  id          String         @id @default(cuid())
+  code        String         @unique
+  nom         String
+  typeProjet  TypeProjet
+  statut      StatutChantier @default(EN_PREPARATION)
+  description String?
+
+  clientId          String
+  client            Intervenant  @relation("ChantierClient", fields: [clientId], references: [id])
+  maitreOuvrageId   String?
+  maitreOuvrage     Intervenant? @relation("ChantierMOA", fields: [maitreOuvrageId], references: [id])
+  architecteId      String?
+  architecte        Intervenant? @relation("ChantierArchitecte", fields: [architecteId], references: [id])
+  bureauEtudesId    String?
+  bureauEtudes      Intervenant? @relation("ChantierBET", fields: [bureauEtudesId], references: [id])
+  bureauControleId  String?
+  bureauControle    Intervenant? @relation("ChantierBC", fields: [bureauControleId], references: [id])
+  conducteurId      String?
+  conducteur        Intervenant? @relation("ChantierConducteur", fields: [conducteurId], references: [id])
+  chefChantierId    String?
+  chefChantier      Intervenant? @relation("ChantierChef", fields: [chefChantierId], references: [id])
+  responsableQhseId String?
+  responsableQhse   Intervenant? @relation("ChantierQHSE", fields: [responsableQhseId], references: [id])
+
+  adresse   String?
+  ville     String?
+  region    Region?
+  latitude  Decimal? @db.Decimal(9, 6)
+  longitude Decimal? @db.Decimal(9, 6)
+
+  dateDemarrage        DateTime? @db.Date
+  dateFinContractuelle DateTime? @db.Date
+  dateFinReelle        DateTime? @db.Date
+
+  montantMarche   Decimal @default(0) @db.Decimal(18, 0)
+  budgetInitial   Decimal @default(0) @db.Decimal(18, 0)
+  budgetActualise Decimal? @db.Decimal(18, 0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  avenants     Avenant[]
+  affectations AffectationChantier[]
+  evenements   EvenementChantier[]
+
+  @@index([statut])
+  @@index([typeProjet])
+}
+
+enum StatutAvenant {
+  BROUILLON
+  SOUMIS
+  APPROUVE
+  REJETE
+}
+
+model Avenant {
+  id                  String        @id @default(cuid())
+  chantierId          String
+  chantier            Chantier      @relation(fields: [chantierId], references: [id], onDelete: Cascade)
+  numero              Int
+  objet               String
+  montant             Decimal       @db.Decimal(18, 0) // peut être négatif (moins-value)
+  delaiSupplementaireJours Int      @default(0)
+  statut              StatutAvenant @default(BROUILLON)
+  dateSignature       DateTime?     @db.Date
+  preparePar          String
+  preparateur         Utilisateur   @relation("AvenantPreparePar", fields: [preparePar], references: [id])
+  approuvePar         String?
+  approbateur         Utilisateur?  @relation("AvenantApprouvePar", fields: [approuvePar], references: [id])
+  dateDecision        DateTime?
+  motifDecision       String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  @@unique([chantierId, numero])
+}
+
+model AffectationChantier {
+  id            String      @id @default(cuid())
+  chantierId    String
+  chantier      Chantier    @relation(fields: [chantierId], references: [id], onDelete: Cascade)
+  intervenantId String
+  intervenant   Intervenant @relation(fields: [intervenantId], references: [id])
+  roleChantier  String      // ex. « Conducteur de travaux », « Sous-traitant lot gros œuvre »
+  dateDebut     DateTime?   @db.Date
+  dateFin       DateTime?   @db.Date
+  // Accès accordé au portail pour ce chantier (utilisateurs externes) ou périmètre (internes)
+  accesPortail  Boolean     @default(false)
+  createdAt     DateTime    @default(now())
+
+  @@unique([chantierId, intervenantId, roleChantier])
+  @@index([intervenantId])
+}
+
+model EvenementChantier {
+  id         String      @id @default(cuid())
+  chantierId String
+  chantier   Chantier    @relation(fields: [chantierId], references: [id], onDelete: Cascade)
+  date       DateTime    @default(now())
+  type       String      // CREATION, MODIFICATION, STATUT, AVENANT, AFFECTATION, NOTE
+  description String
+  userId     String?
+  user       Utilisateur? @relation(fields: [userId], references: [id])
+
+  @@index([chantierId, date])
+}
