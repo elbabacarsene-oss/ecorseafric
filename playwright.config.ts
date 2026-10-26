@@ -19,6 +19,6 @@ export default defineConfig({
     url: `http://localhost:${PORT}/connexion`,
     reuseExistingServer: false,
     timeout: 120_000,
-    env: { DATABASE_URL: URL_BASE_TEST, COOKIE_INSECURE: "1" },
+    env: { DATABASE_URL: URL_BASE_TEST, DIRECT_URL: URL_BASE_TEST, COOKIE_INSECURE: "1" },
   },
 });

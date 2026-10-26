@@ -38,7 +38,7 @@ Date : 25/10/2026
 
 ## Limitations restantes
 
-- Pas encore d'hébergement en ligne ni de dépôt GitHub (en attente de vos choix/comptes).
+- Hébergement retenu : Supabase + Vercel (guide : docs/DEPLOIEMENT.md) ; pas encore de dépôt GitHub.
 - Documents, photos, planning : étape 2. Contrats de personnel/sous-traitance : étape 3.
 - Indicateurs financiers (dépenses, factures, trésorerie, marge actualisée), RH, achats, QHSE : étapes 3 à 5.
 - Portail : seule la consultation de chantier existe ; les espaces spécifiques architecte / BET / sous-traitant /
