@@ -2,7 +2,9 @@ import Link from "next/link";
 import { FormulaireAction } from "@/components/FormulaireAction";
 import { Champ, ChampMontant, CaseACocher } from "@/components/Champs";
 import { BadgeStatut, EnTetePage, Info } from "@/components/ui";
-import { exigerChantier } from "@/lib/acces";
+import { chantierAccessible, exigerChantier } from "@/lib/acces";
+import { ListeDocuments, Photos } from "@/components/Documents";
+import { VoletsChantier } from "./VoletsChantier";
 import { exigerPermission } from "@/lib/auth";
 import {
   budgetReference, dateFinActualisee, delaiAvenantsApprouves, dureePrevueJours, estEnRetard, joursDeRetard,
@@ -200,7 +202,7 @@ export default async function FicheChantier({ params }: { params: Promise<{ id: 
             {r("creer") && !user.externe && (
               <details className="rounded-lg border border-slate-200 p-3">
                 <summary className="cursor-pointer text-sm font-medium text-ecorse-bleu-700">Préparer un avenant</summary>
-                <FormulaireAction action={creerAvenant.bind(null, c.id)} libelle="Enregistrer l'avenant" reinitialiser className="mt-3 grid gap-3 sm:grid-cols-2">
+                <FormulaireAction action={creerAvenant.bind(null, c.id)} libelle="Enregistrer l'avenant" className="mt-3 grid gap-3 sm:grid-cols-2">
                   <Champ nom="objet" libelle="Objet" requis className="sm:col-span-2" />
                   <ChampMontant nom="montant" libelle="Montant (F CFA)" requis aide="Négatif pour une moins-value." />
                   <Champ nom="delai" libelle="Délai supplémentaire (jours)" type="number" min={0} defaut={0} />
@@ -249,7 +251,7 @@ export default async function FicheChantier({ params }: { params: Promise<{ id: 
             {peut(user.role, "affectations", "creer") && (
               <details className="rounded-lg border border-slate-200 p-3">
                 <summary className="cursor-pointer text-sm font-medium text-ecorse-bleu-700">Affecter un intervenant</summary>
-                <FormulaireAction action={ajouterAffectation.bind(null, c.id)} libelle="Affecter" reinitialiser className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <FormulaireAction action={ajouterAffectation.bind(null, c.id)} libelle="Affecter" className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                   <div className="sm:col-span-2">
                     <label htmlFor="intervenantId" className="etiquette">Intervenant <span className="text-rose-600">*</span></label>
                     <select id="intervenantId" name="intervenantId" required className="champ" defaultValue="">
@@ -273,7 +275,7 @@ export default async function FicheChantier({ params }: { params: Promise<{ id: 
           <section className="carte lg:col-span-3">
             <h2 className="mb-3">Historique des événements</h2>
             {peut(user.role, "chantiers", "modifier") && (
-              <FormulaireAction action={ajouterNote.bind(null, c.id)} libelle="Ajouter au journal" reinitialiser classeBouton="btn-secondaire" className="mb-4 space-y-2">
+              <FormulaireAction action={ajouterNote.bind(null, c.id)} libelle="Ajouter au journal" classeBouton="btn-secondaire" className="mb-4 space-y-2">
                 <textarea name="note" rows={2} required maxLength={2000} className="champ" placeholder="Événement, décision, visite, observation…" aria-label="Note" />
               </FormulaireAction>
             )}
@@ -292,11 +294,21 @@ export default async function FicheChantier({ params }: { params: Promise<{ id: 
           </section>
         )}
 
-        <section className="carte lg:col-span-3 text-sm text-slate-500">
-          <h2 className="mb-1 text-slate-700">Documents contractuels, photos et planning</h2>
-          Ces volets seront livrés à l'étape 2 (gestion documentaire avec versions, photos, planning Gantt).
-        </section>
+        <VoletsChantier user={user} chantierId={c.id} />
       </div>
+
+      {peut(user.role, "documents", "lire") && (
+        <>
+          <ListeDocuments
+            user={user}
+            titre={user.externe ? "Documents partagés" : "Documents du chantier"}
+            where={{ chantierId: c.id }}
+            cible={{ chantierId: c.id }}
+            peutDeposer={!user.externe && peut(user.role, "documents", "creer") && (await chantierAccessible(user, c.id, "creer", "documents"))}
+          />
+          <Photos user={user} where={{ chantierId: c.id }} cible={{ chantierId: c.id }} peutDeposer={!user.externe && peut(user.role, "documents", "creer") && (await chantierAccessible(user, c.id, "creer", "documents"))} />
+        </>
+      )}
     </>
   );
 }

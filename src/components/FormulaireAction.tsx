@@ -1,13 +1,11 @@
 "use client";
 
-import { useActionState, useEffect, useRef } from "react";
-import { useFormStatus } from "react-dom";
+import { startTransition, useActionState, useEffect, useRef } from "react";
 
 export type EtatAction = { erreur?: string; succes?: string; jeton?: number } | undefined;
 type ActionServeur = (etat: EtatAction, formData: FormData) => Promise<EtatAction>;
 
-function BoutonEnvoi({ libelle, classe }: { libelle: string; classe: string }) {
-  const { pending } = useFormStatus();
+function BoutonEnvoi({ libelle, classe, pending }: { libelle: string; classe: string; pending: boolean }) {
   return (
     <button type="submit" className={classe} disabled={pending}>
       {pending ? "Enregistrement…" : libelle}
@@ -18,13 +16,14 @@ function BoutonEnvoi({ libelle, classe }: { libelle: string; classe: string }) {
 /**
  * Formulaire branché sur une action serveur : affiche l'erreur réellement renvoyée par le serveur,
  * et ne confirme l'enregistrement que si le serveur l'a confirmé.
+ * Les champs sont vidés après un succès, mais conservés après une erreur pour que l'utilisateur
+ * corrige sa saisie au lieu de tout retaper (React 19 vide sinon le formulaire dans les deux cas).
  */
 export function FormulaireAction({
   action,
   children,
   libelle = "Enregistrer",
   classeBouton = "btn-primaire",
-  reinitialiser = false,
   confirmation,
   className = "space-y-4",
   actionsSupplementaires,
@@ -33,24 +32,25 @@ export function FormulaireAction({
   children?: React.ReactNode;
   libelle?: string;
   classeBouton?: string;
-  reinitialiser?: boolean;
   confirmation?: string;
   className?: string;
   actionsSupplementaires?: React.ReactNode;
 }) {
-  const [etat, envoyer] = useActionState(action, undefined);
+  const [etat, envoyer, enCours] = useActionState(action, undefined);
   const ref = useRef<HTMLFormElement>(null);
   useEffect(() => {
-    if (reinitialiser && etat?.succes) ref.current?.reset();
-  }, [etat, reinitialiser]);
+    if (etat?.succes) ref.current?.reset();
+  }, [etat]);
 
   return (
     <form
       ref={ref}
-      action={envoyer}
       className={className}
       onSubmit={(e) => {
-        if (confirmation && !window.confirm(confirmation)) e.preventDefault();
+        e.preventDefault();
+        if (enCours || (confirmation && !window.confirm(confirmation))) return;
+        const donnees = new FormData(e.currentTarget, (e.nativeEvent as SubmitEvent).submitter);
+        startTransition(() => envoyer(donnees));
       }}
     >
       {children}
@@ -65,7 +65,7 @@ export function FormulaireAction({
         </p>
       )}
       <div className="flex flex-wrap items-center gap-2">
-        <BoutonEnvoi libelle={libelle} classe={classeBouton} />
+        <BoutonEnvoi libelle={libelle} classe={classeBouton} pending={enCours} />
         {actionsSupplementaires}
       </div>
     </form>

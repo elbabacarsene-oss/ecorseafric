@@ -3,9 +3,11 @@
 ERP BTP d'ECORSE AFRIC (Sénégal) : chantiers, parties prenantes, études, finances, QHSE.
 Langue : français · Devise : franc CFA (XOF) · Fuseau : Africa/Dakar.
 
-**État : étape 1 (socle)** — authentification, utilisateurs et rôles, matrice des permissions, entreprise,
-clients et parties prenantes, chantiers (avec avenants et affectations), tableau de bord.
-Voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) et [docs/BILAN_ETAPE_1.md](docs/BILAN_ETAPE_1.md).
+**État : étape 2** — en plus du socle (authentification, rôles, entreprise, parties prenantes, chantiers, avenants,
+tableau de bord) : bibliothèque d'ouvrages, devis (DQE/BPU, sous-détails, import de quantités, validation, PDF/Excel,
+transformation en chantier), budgets détaillés, planning Gantt avec chemin critique, rapports journaliers mobiles,
+gestion documentaire avec versions.
+Voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/BILAN_ETAPE_1.md](docs/BILAN_ETAPE_1.md) et [docs/BILAN_ETAPE_2.md](docs/BILAN_ETAPE_2.md).
 
 ## Démarrage local
 
@@ -25,7 +27,7 @@ Aucune donnée fictive n'est insérée : la base démarre vide, l'administrateur
 ## Tests
 
 ```bash
-npm test             # tests unitaires (calculs, formats, matrice des permissions)
+npm test             # tests unitaires (calculs, devis, planning, imports, formats, matrice des permissions)
 npm run build && npm run test:e2e   # tests de bout en bout sur la base ecorse_btp_test (vidée à chaque exécution)
 ```
 

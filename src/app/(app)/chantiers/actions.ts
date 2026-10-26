@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { chantierAccessible } from "@/lib/acces";
 import { AccesRefuse, verifierPermission, type UtilisateurConnecte } from "@/lib/auth";
 import { evenementChantier, journaliser } from "@/lib/audit";
+import { prochainCodeChantier } from "@/lib/codes";
 import { db } from "@/lib/db";
 import { formatDate, formatXOF } from "@/lib/format";
 import { choix, coche, date, decimal, entier, ErreurSaisie, executer, montant, texte } from "@/lib/formulaire";
@@ -53,10 +54,11 @@ function lireChantier(fd: FormData) {
   };
 }
 
-function lireFinances(fd: FormData, user: UtilisateurConnecte) {
+function lireFinances(fd: FormData, user: UtilisateurConnecte, budgetDetaille = false) {
   const f: { montantMarche?: number; budgetInitial?: number; budgetActualise?: number | null } = {};
   if (peut(user.role, "chantiers_marche", "modifier")) f.montantMarche = montant(fd, "montantMarche", { libelle: "Montant du marché" }) ?? 0;
-  if (peut(user.role, "chantiers_budget", "modifier")) {
+  // Avec un budget détaillé, les budgets de la fiche sont calculés à partir des lignes (voir budgets/actions.ts).
+  if (peut(user.role, "chantiers_budget", "modifier") && !budgetDetaille) {
     f.budgetInitial = montant(fd, "budgetInitial", { libelle: "Budget initial" }) ?? 0;
     f.budgetActualise = montant(fd, "budgetActualise", { libelle: "Budget actualisé" });
   }
@@ -76,14 +78,6 @@ async function synchroniserAffectations(tx: Prisma.TransactionClient, chantierId
       });
     }
   }
-}
-
-async function prochainCodeChantier(tx: Prisma.TransactionClient) {
-  const annee = new Date().getUTCFullYear();
-  const prefixe = `CH-${annee}-`;
-  const dernier = await tx.chantier.findFirst({ where: { code: { startsWith: prefixe } }, orderBy: { code: "desc" }, select: { code: true } });
-  const n = dernier ? Number(dernier.code.slice(prefixe.length)) + 1 : 1;
-  return `${prefixe}${String(n).padStart(3, "0")}`;
 }
 
 export async function creerChantier(_: EtatAction, fd: FormData): Promise<EtatAction> {
@@ -113,10 +107,10 @@ export async function modifierChantier(id: string, _: EtatAction, fd: FormData):
   const r = await executer(async () => {
     const { user } = await verifierPermission("chantiers", "modifier");
     if (!(await chantierAccessible(user, id, "modifier"))) throw new AccesRefuse("Chantier introuvable ou non autorisé.");
-    const avant = await db.chantier.findUniqueOrThrow({ where: { id } });
+    const avant = await db.chantier.findUniqueOrThrow({ where: { id }, include: { _count: { select: { lignesBudget: true } } } });
     const data = lireChantier(fd);
     const roles = await lireRolesCles(fd);
-    const finances = lireFinances(fd, user);
+    const finances = lireFinances(fd, user, avant._count.lignesBudget > 0);
     const apres = { ...data, ...roles, ...finances };
     const modifs: Record<string, { avant: string | null; apres: string | null }> = {};
     for (const [k, v] of Object.entries(apres)) {

@@ -15,7 +15,7 @@ export default async function PageNouvelUtilisateur({ searchParams }: { searchPa
     <>
       <EnTetePage titre="Nouvel utilisateur" sousTitre="Un mot de passe provisoire sera généré et affiché une seule fois." />
       <div className="carte">
-        <FormulaireAction action={creerUtilisateur} libelle="Créer le compte" reinitialiser>
+        <FormulaireAction action={creerUtilisateur} libelle="Créer le compte">
           <ChampsUtilisateur intervenants={libres.map((i) => [i.id, `${i.nom}${i.prenom ? " " + i.prenom : ""} (${i.code})`])} intervenantDefaut={intervenant} />
         </FormulaireAction>
       </div>

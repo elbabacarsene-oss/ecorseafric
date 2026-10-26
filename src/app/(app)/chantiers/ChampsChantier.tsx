@@ -7,12 +7,13 @@ import { ROLES_CLES } from "@/lib/roles-cles";
 type Option = Pick<Intervenant, "id" | "nom" | "prenom" | "code" | "categorie" | "type">;
 
 export function ChampsChantier({
-  c, intervenants, peutMarche, peutBudget,
+  c, intervenants, peutMarche, peutBudget, budgetDetaille = false,
 }: {
   c?: Chantier | null;
   intervenants: Option[];
   peutMarche: boolean;
   peutBudget: boolean;
+  budgetDetaille?: boolean;
 }) {
   const optionsPour = (r: (typeof ROLES_CLES)[number]) =>
     intervenants
@@ -68,8 +69,11 @@ export function ChampsChantier({
         <fieldset className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <legend className="mb-2 text-sm font-semibold text-ecorse-bleu-800">Montants (F CFA)</legend>
           {peutMarche && <ChampMontant nom="montantMarche" libelle="Montant du marché (initial)" defaut={c?.montantMarche?.toString()} aide="Hors avenants. Les avenants approuvés s'y ajoutent automatiquement." />}
-          {peutBudget && <ChampMontant nom="budgetInitial" libelle="Budget initial (coût prévisionnel)" defaut={c?.budgetInitial?.toString()} />}
-          {peutBudget && <ChampMontant nom="budgetActualise" libelle="Budget actualisé" defaut={c?.budgetActualise?.toString()} aide="Laisser vide tant qu'il n'y a pas de révision." />}
+          {peutBudget && !budgetDetaille && <ChampMontant nom="budgetInitial" libelle="Budget initial (coût prévisionnel)" defaut={c?.budgetInitial?.toString()} aide="Montant global ; ou établissez le budget détaillé depuis la fiche du chantier." />}
+          {peutBudget && !budgetDetaille && <ChampMontant nom="budgetActualise" libelle="Budget actualisé" defaut={c?.budgetActualise?.toString()} aide="Laisser vide tant qu'il n'y a pas de révision." />}
+          {peutBudget && budgetDetaille && (
+            <p className="text-sm text-slate-500 sm:col-span-2">Budget initial et actualisé calculés à partir du budget détaillé (page Budget du chantier).</p>
+          )}
         </fieldset>
       )}
     </div>

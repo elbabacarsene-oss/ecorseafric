@@ -22,7 +22,7 @@ export default async function MonCompte() {
         </section>
         <section className="carte">
           <h2 className="mb-3">Changer mon mot de passe</h2>
-          <FormulaireAction action={actionChangerMotDePasse} libelle="Changer le mot de passe" reinitialiser>
+          <FormulaireAction action={actionChangerMotDePasse} libelle="Changer le mot de passe">
             <Champ nom="actuel" libelle="Mot de passe actuel" type="password" requis autoComplete="current-password" />
             <Champ nom="nouveau" libelle="Nouveau mot de passe" type="password" requis minLength={LONGUEUR_MIN_MDP} autoComplete="new-password" />
             <Champ nom="confirmation" libelle="Confirmation" type="password" requis autoComplete="new-password" />

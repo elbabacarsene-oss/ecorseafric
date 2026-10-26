@@ -10,7 +10,7 @@ const enTetesSecurite = [
 
 const config: NextConfig = {
   poweredByHeader: false,
-  experimental: { serverActions: { bodySizeLimit: "2mb" } },
+  experimental: { serverActions: { bodySizeLimit: "4.5mb" } },
   async headers() {
     return [{ source: "/:path*", headers: enTetesSecurite }];
   },

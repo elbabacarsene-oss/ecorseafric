@@ -83,3 +83,14 @@ export async function executer(fn: () => Promise<EtatAction | void>): Promise<Et
     throw e;
   }
 }
+
+/** Nombre décimal positif (quantités, prix unitaires, taux), virgule ou point. */
+export function nombre(fd: FormData, nom: string, opts: { requis?: boolean; libelle?: string; min?: number; max?: number } = {}): number | null {
+  const v = texte(fd, nom, opts);
+  if (v === null) return null;
+  const n = Number(v.replace(/[\s  ]/g, "").replace(",", "."));
+  const min = opts.min ?? 0;
+  const max = opts.max ?? 1e12;
+  if (!Number.isFinite(n) || n < min || n > max) throw new ErreurSaisie(`Valeur invalide pour « ${opts.libelle ?? nom} »${opts.max !== undefined ? ` (entre ${min} et ${max})` : ""}.`);
+  return n;
+}

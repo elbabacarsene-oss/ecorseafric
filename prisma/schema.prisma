@@ -1,4 +1,4 @@
-// ECORSE AFRIC BTP MANAGER 360 – modèle de données (étape 1 : socle)
+// ECORSE AFRIC BTP MANAGER 360 – modèle de données (étape 1 : socle ; étape 2 : devis, budgets, planning, rapports, documents)
 // Montants en francs CFA (XOF), stockés en Decimal(18,0) : le XOF n'a pas de subdivision utilisée.
 // Les dates sont stockées en UTC ; Africa/Dakar = UTC+0 sans heure d'été.
 
@@ -7,7 +7,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider  = "postgresql"
   url       = env("DATABASE_URL")
   // Connexion directe (sans pooler) pour les migrations. Supabase : port 5432 ; DATABASE_URL utilise le pooler (port 6543).
   directUrl = env("DIRECT_URL")
@@ -16,19 +16,19 @@ datasource db {
 // ───────────── Entreprise ─────────────
 
 model Entreprise {
-  id            Int      @id @default(1)
-  raisonSociale String   @default("ECORSE AFRIC")
+  id             Int      @id @default(1)
+  raisonSociale  String   @default("ECORSE AFRIC")
   formeJuridique String?
-  ninea         String?
-  rccm          String?
-  adresse       String?
-  ville         String?  @default("Dakar")
-  telephone     String?
-  email         String?
-  siteWeb       String?
-  logo          Bytes?
-  logoMime      String?
-  updatedAt     DateTime @updatedAt
+  ninea          String?
+  rccm           String?
+  adresse        String?
+  ville          String?  @default("Dakar")
+  telephone      String?
+  email          String?
+  siteWeb        String?
+  logo           Bytes?
+  logoMime       String?
+  updatedAt      DateTime @updatedAt
 }
 
 // ───────────── Sécurité ─────────────
@@ -56,29 +56,40 @@ enum Role {
 }
 
 model Utilisateur {
-  id                String    @id @default(cuid())
-  email             String    @unique
-  nom               String
-  prenom            String
-  telephone         String?
-  passwordHash      String
-  role              Role
-  actif             Boolean   @default(true)
-  doitChangerMdp    Boolean   @default(true)
-  tentativesEchouees Int      @default(0)
-  verrouilleJusqua  DateTime?
-  derniereConnexion DateTime?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  id                 String    @id @default(cuid())
+  email              String    @unique
+  nom                String
+  prenom             String
+  telephone          String?
+  passwordHash       String
+  role               Role
+  actif              Boolean   @default(true)
+  doitChangerMdp     Boolean   @default(true)
+  tentativesEchouees Int       @default(0)
+  verrouilleJusqua   DateTime?
+  derniereConnexion  DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   intervenantId String?      @unique
   intervenant   Intervenant? @relation(fields: [intervenantId], references: [id])
 
   sessions          Session[]
   journal           JournalAudit[]
-  avenantsPrepares  Avenant[]  @relation("AvenantPreparePar")
-  avenantsApprouves Avenant[]  @relation("AvenantApprouvePar")
+  avenantsPrepares  Avenant[]           @relation("AvenantPreparePar")
+  avenantsApprouves Avenant[]           @relation("AvenantApprouvePar")
   evenements        EvenementChantier[]
+
+  devisPrepares    Devis[]             @relation("DevisPreparePar")
+  devisValides     Devis[]             @relation("DevisValidePar")
+  lignesVerifiees  LigneDevis[]        @relation("LigneVerifieePar")
+  budgetsPrepares  Chantier[]          @relation("BudgetPreparePar")
+  budgetsValides   Chantier[]          @relation("BudgetValidePar")
+  rapportsRediges  RapportJournalier[] @relation("RapportRedacteur")
+  rapportsValides  RapportJournalier[] @relation("RapportValidePar")
+  documentsCrees   Document[]          @relation("DocumentCreePar")
+  versionsDeposees VersionDocument[]   @relation("VersionDeposeePar")
+  versionsDecidees VersionDocument[]   @relation("VersionDecideePar")
 }
 
 model Session {
@@ -158,39 +169,43 @@ enum TypeIntervenant {
 }
 
 model Intervenant {
-  id            String               @id @default(cuid())
-  code          String               @unique
-  categorie     CategorieIntervenant
-  type          TypeIntervenant
-  personneMorale Boolean             @default(false)
-  nom           String // raison sociale si personne morale
-  prenom        String?
-  fonction      String?
-  entreprise    String?
-  telephone     String?
-  telephone2    String?
-  email         String?
-  adresse       String?
-  ville         String?
-  region        Region?
-  ninea         String?
-  rccm          String?
-  notes         String?
-  actif         Boolean              @default(true)
-  createdAt     DateTime             @default(now())
-  updatedAt     DateTime             @updatedAt
+  id             String               @id @default(cuid())
+  code           String               @unique
+  categorie      CategorieIntervenant
+  type           TypeIntervenant
+  personneMorale Boolean              @default(false)
+  nom            String // raison sociale si personne morale
+  prenom         String?
+  fonction       String?
+  entreprise     String?
+  telephone      String?
+  telephone2     String?
+  email          String?
+  adresse        String?
+  ville          String?
+  region         Region?
+  ninea          String?
+  rccm           String?
+  notes          String?
+  actif          Boolean              @default(true)
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
 
-  utilisateur   Utilisateur?
-  affectations  AffectationChantier[]
+  utilisateur  Utilisateur?
+  affectations AffectationChantier[]
 
-  chantiersClient          Chantier[] @relation("ChantierClient")
-  chantiersMaitreOuvrage   Chantier[] @relation("ChantierMOA")
-  chantiersArchitecte      Chantier[] @relation("ChantierArchitecte")
-  chantiersBureauEtudes    Chantier[] @relation("ChantierBET")
-  chantiersBureauControle  Chantier[] @relation("ChantierBC")
-  chantiersConducteur      Chantier[] @relation("ChantierConducteur")
-  chantiersChefChantier    Chantier[] @relation("ChantierChef")
-  chantiersQhse            Chantier[] @relation("ChantierQHSE")
+  chantiersClient         Chantier[] @relation("ChantierClient")
+  chantiersMaitreOuvrage  Chantier[] @relation("ChantierMOA")
+  chantiersArchitecte     Chantier[] @relation("ChantierArchitecte")
+  chantiersBureauEtudes   Chantier[] @relation("ChantierBET")
+  chantiersBureauControle Chantier[] @relation("ChantierBC")
+  chantiersConducteur     Chantier[] @relation("ChantierConducteur")
+  chantiersChefChantier   Chantier[] @relation("ChantierChef")
+  chantiersQhse           Chantier[] @relation("ChantierQHSE")
+
+  devis             Devis[]         @relation("DevisClient")
+  tachesResponsable TachePlanning[] @relation("TacheResponsable")
+  tachesIntervenant TachePlanning[] @relation("TacheIntervenant")
 
   @@index([categorie, type])
   @@index([nom])
@@ -275,16 +290,30 @@ model Chantier {
   dateFinContractuelle DateTime? @db.Date
   dateFinReelle        DateTime? @db.Date
 
-  montantMarche   Decimal @default(0) @db.Decimal(18, 0)
-  budgetInitial   Decimal @default(0) @db.Decimal(18, 0)
+  montantMarche   Decimal  @default(0) @db.Decimal(18, 0)
+  budgetInitial   Decimal  @default(0) @db.Decimal(18, 0)
   budgetActualise Decimal? @db.Decimal(18, 0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Budget détaillé (étape 2) : quand des lignes existent, budgetInitial / budgetActualise en sont la somme.
+  budgetStatut         StatutBudget @default(NON_ETABLI)
+  budgetPreparePar     String?
+  budgetPreparateur    Utilisateur? @relation("BudgetPreparePar", fields: [budgetPreparePar], references: [id])
+  budgetValidePar      String?
+  budgetValidateur     Utilisateur? @relation("BudgetValidePar", fields: [budgetValidePar], references: [id])
+  budgetDateValidation DateTime?
+  planningReferenceLe  DateTime? // date à laquelle le planning de référence (initial) a été figé
+
   avenants     Avenant[]
   affectations AffectationChantier[]
   evenements   EvenementChantier[]
+  devis        Devis[]
+  lignesBudget LigneBudget[]
+  taches       TachePlanning[]
+  rapports     RapportJournalier[]
+  documents    Document[]
 
   @@index([statut])
   @@index([typeProjet])
@@ -298,23 +327,23 @@ enum StatutAvenant {
 }
 
 model Avenant {
-  id                  String        @id @default(cuid())
-  chantierId          String
-  chantier            Chantier      @relation(fields: [chantierId], references: [id], onDelete: Cascade)
-  numero              Int
-  objet               String
-  montant             Decimal       @db.Decimal(18, 0) // peut être négatif (moins-value)
-  delaiSupplementaireJours Int      @default(0)
-  statut              StatutAvenant @default(BROUILLON)
-  dateSignature       DateTime?     @db.Date
-  preparePar          String
-  preparateur         Utilisateur   @relation("AvenantPreparePar", fields: [preparePar], references: [id])
-  approuvePar         String?
-  approbateur         Utilisateur?  @relation("AvenantApprouvePar", fields: [approuvePar], references: [id])
-  dateDecision        DateTime?
-  motifDecision       String?
-  createdAt           DateTime      @default(now())
-  updatedAt           DateTime      @updatedAt
+  id                       String        @id @default(cuid())
+  chantierId               String
+  chantier                 Chantier      @relation(fields: [chantierId], references: [id], onDelete: Cascade)
+  numero                   Int
+  objet                    String
+  montant                  Decimal       @db.Decimal(18, 0) // peut être négatif (moins-value)
+  delaiSupplementaireJours Int           @default(0)
+  statut                   StatutAvenant @default(BROUILLON)
+  dateSignature            DateTime?     @db.Date
+  preparePar               String
+  preparateur              Utilisateur   @relation("AvenantPreparePar", fields: [preparePar], references: [id])
+  approuvePar              String?
+  approbateur              Utilisateur?  @relation("AvenantApprouvePar", fields: [approuvePar], references: [id])
+  dateDecision             DateTime?
+  motifDecision            String?
+  createdAt                DateTime      @default(now())
+  updatedAt                DateTime      @updatedAt
 
   @@unique([chantierId, numero])
 }
@@ -325,7 +354,7 @@ model AffectationChantier {
   chantier      Chantier    @relation(fields: [chantierId], references: [id], onDelete: Cascade)
   intervenantId String
   intervenant   Intervenant @relation(fields: [intervenantId], references: [id])
-  roleChantier  String      // ex. « Conducteur de travaux », « Sous-traitant lot gros œuvre »
+  roleChantier  String // ex. « Conducteur de travaux », « Sous-traitant lot gros œuvre »
   dateDebut     DateTime?   @db.Date
   dateFin       DateTime?   @db.Date
   // Accès accordé au portail pour ce chantier (utilisateurs externes) ou périmètre (internes)
@@ -337,14 +366,440 @@ model AffectationChantier {
 }
 
 model EvenementChantier {
-  id         String      @id @default(cuid())
-  chantierId String
-  chantier   Chantier    @relation(fields: [chantierId], references: [id], onDelete: Cascade)
-  date       DateTime    @default(now())
-  type       String      // CREATION, MODIFICATION, STATUT, AVENANT, AFFECTATION, NOTE
+  id          String       @id @default(cuid())
+  chantierId  String
+  chantier    Chantier     @relation(fields: [chantierId], references: [id], onDelete: Cascade)
+  date        DateTime     @default(now())
+  type        String // CREATION, MODIFICATION, STATUT, AVENANT, AFFECTATION, NOTE
   description String
-  userId     String?
-  user       Utilisateur? @relation(fields: [userId], references: [id])
+  userId      String?
+  user        Utilisateur? @relation(fields: [userId], references: [id])
 
   @@index([chantierId, date])
+}
+
+// ═════════════ Étape 2 ═════════════
+
+enum Unite {
+  M
+  M2
+  M3
+  KG
+  TONNE
+  U
+  FORFAIT
+  HEURE
+  JOUR
+}
+
+// ───────────── Bibliothèque d'ouvrages ─────────────
+
+enum CategorieOuvrage {
+  TERRASSEMENT
+  FONDATIONS
+  BETON_ARME
+  MACONNERIE
+  ETANCHEITE
+  CHARPENTE
+  COUVERTURE
+  ELECTRICITE
+  PLOMBERIE
+  CLIMATISATION
+  MENUISERIE
+  REVETEMENTS
+  PEINTURE
+  VRD
+  ASSAINISSEMENT
+  AMENAGEMENTS_EXTERIEURS
+}
+
+enum TypeComposant {
+  MATERIAU
+  MAIN_OEUVRE
+  MATERIEL
+  SOUS_TRAITANCE
+  AUTRE
+}
+
+model Ouvrage {
+  id          String           @id @default(cuid())
+  code        String           @unique
+  categorie   CategorieOuvrage
+  designation String
+  unite       Unite
+  description String?
+  actif       Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  composants  ComposantOuvrage[]
+  lignesDevis LigneDevis[]
+
+  @@index([categorie])
+}
+
+/**
+ * Sous-détail de prix d'un ouvrage : quantités et prix pour UNE unité d'ouvrage.
+ */
+model ComposantOuvrage {
+  id           String        @id @default(cuid())
+  ouvrageId    String
+  ouvrage      Ouvrage       @relation(fields: [ouvrageId], references: [id], onDelete: Cascade)
+  ordre        Int           @default(0)
+  type         TypeComposant
+  designation  String
+  unite        Unite
+  quantite     Decimal       @db.Decimal(18, 4)
+  prixUnitaire Decimal       @db.Decimal(18, 2)
+}
+
+// ───────────── Devis ─────────────
+
+enum StatutDevis {
+  BROUILLON
+  SOUMIS
+  VALIDE
+  ENVOYE
+  ACCEPTE
+  REFUSE
+  REMPLACE
+}
+
+enum OrigineLigne {
+  SAISIE
+  BIBLIOTHEQUE
+  IMPORT
+}
+
+model Devis {
+  id         String      @id @default(cuid())
+  numero     String // DV-AAAA-NNN, commun à toutes les variantes et versions
+  variante   String      @default("A")
+  version    Int         @default(1)
+  objet      String
+  statut     StatutDevis @default(BROUILLON)
+  clientId   String
+  client     Intervenant @relation("DevisClient", fields: [clientId], references: [id])
+  chantierId String?
+  chantier   Chantier?   @relation(fields: [chantierId], references: [id])
+  typeProjet TypeProjet?
+  lieu       String?
+
+  // Coefficients en pourcentage
+  tauxFraisChantier Decimal @default(0) @db.Decimal(7, 3)
+  tauxFraisGeneraux Decimal @default(0) @db.Decimal(7, 3)
+  tauxMarge         Decimal @default(0) @db.Decimal(7, 3)
+  tauxTva           Decimal @default(18) @db.Decimal(7, 3)
+
+  dateDevis           DateTime  @default(now()) @db.Date
+  dateValidite        DateTime? @db.Date
+  delaiExecutionJours Int?
+  conditions          String?
+  notesInternes       String?
+
+  preparePar    String
+  preparateur   Utilisateur  @relation("DevisPreparePar", fields: [preparePar], references: [id])
+  validePar     String?
+  validateur    Utilisateur? @relation("DevisValidePar", fields: [validePar], references: [id])
+  dateDecision  DateTime?
+  motifDecision String?
+  dateEnvoi     DateTime?
+  dateReponse   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lignes    LigneDevis[]
+  documents Document[]
+
+  @@unique([numero, variante, version])
+  @@index([statut])
+  @@index([clientId])
+}
+
+model LigneDevis {
+  id                  String       @id @default(cuid())
+  devisId             String
+  devis               Devis        @relation(fields: [devisId], references: [id], onDelete: Cascade)
+  ordre               Int          @default(0)
+  lot                 String
+  ouvrageId           String?
+  ouvrage             Ouvrage?     @relation(fields: [ouvrageId], references: [id], onDelete: SetNull)
+  designation         String
+  unite               Unite
+  quantite            Decimal      @db.Decimal(18, 3)
+  // Déboursé sec unitaire : somme du sous-détail s'il existe, sinon saisi.
+  debourseSecUnitaire Decimal      @default(0) @db.Decimal(18, 2)
+  // Prix unitaire de vente imposé (bordereau client) ; sinon déboursé sec × coefficient de vente.
+  prixUnitaireImpose  Decimal?     @db.Decimal(18, 0)
+  origine             OrigineLigne @default(SAISIE)
+  // Les quantités importées doivent être vérifiées par une personne avant la validation du devis.
+  verifiee            Boolean      @default(true)
+  verifieePar         String?
+  verificateur        Utilisateur? @relation("LigneVerifieePar", fields: [verifieePar], references: [id])
+  dateVerification    DateTime?
+
+  sousDetail SousDetailLigne[]
+
+  @@index([devisId, ordre])
+}
+
+model SousDetailLigne {
+  id           String        @id @default(cuid())
+  ligneId      String
+  ligne        LigneDevis    @relation(fields: [ligneId], references: [id], onDelete: Cascade)
+  ordre        Int           @default(0)
+  type         TypeComposant
+  designation  String
+  unite        Unite
+  quantite     Decimal       @db.Decimal(18, 4)
+  prixUnitaire Decimal       @db.Decimal(18, 2)
+}
+
+// ───────────── Budgets ─────────────
+
+enum StatutBudget {
+  NON_ETABLI
+  BROUILLON
+  SOUMIS
+  VALIDE
+}
+
+enum PosteBudget {
+  MATERIAUX
+  MAIN_OEUVRE
+  MATERIEL
+  SOUS_TRAITANCE
+  FRAIS_CHANTIER
+  FRAIS_GENERAUX
+  AUTRE
+}
+
+model LigneBudget {
+  id               String      @id @default(cuid())
+  chantierId       String
+  chantier         Chantier    @relation(fields: [chantierId], references: [id], onDelete: Cascade)
+  ordre            Int         @default(0)
+  lot              String
+  poste            PosteBudget
+  designation      String
+  montantInitial   Decimal     @db.Decimal(18, 0)
+  montantActualise Decimal?    @db.Decimal(18, 0)
+  commentaire      String?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  @@index([chantierId])
+}
+
+// ───────────── Planning ─────────────
+
+enum TypeTache {
+  TACHE
+  JALON
+}
+
+model TachePlanning {
+  id         String          @id @default(cuid())
+  chantierId String
+  chantier   Chantier        @relation(fields: [chantierId], references: [id], onDelete: Cascade)
+  parentId   String?
+  parent     TachePlanning?  @relation("SousTaches", fields: [parentId], references: [id], onDelete: Cascade)
+  enfants    TachePlanning[] @relation("SousTaches")
+  ordre      Int             @default(0)
+  nom        String
+  type       TypeTache       @default(TACHE)
+  lot        String?
+  corpsEtat  String?
+  equipe     String?
+
+  responsableId String?
+  responsable   Intervenant? @relation("TacheResponsable", fields: [responsableId], references: [id])
+  intervenantId String? // entreprise ou sous-traitant exécutant
+  intervenant   Intervenant? @relation("TacheIntervenant", fields: [intervenantId], references: [id])
+
+  debutPrevu     DateTime  @db.Date
+  finPrevue      DateTime  @db.Date
+  debutReference DateTime? @db.Date // planning initial figé
+  finReference   DateTime? @db.Date
+  debutReel      DateTime? @db.Date
+  finReelle      DateTime? @db.Date
+  avancement     Int       @default(0) // 0 à 100
+  importante     Boolean   @default(false)
+  ressources     String?
+  notes          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  predecesseurs DependanceTache[] @relation("Successeur")
+  successeurs   DependanceTache[] @relation("Predecesseur")
+
+  @@index([chantierId, ordre])
+}
+
+/**
+ * Dépendance fin → début : le successeur commence après la fin du prédécesseur + décalage.
+ */
+model DependanceTache {
+  id             String        @id @default(cuid())
+  predecesseurId String
+  predecesseur   TachePlanning @relation("Predecesseur", fields: [predecesseurId], references: [id], onDelete: Cascade)
+  successeurId   String
+  successeur     TachePlanning @relation("Successeur", fields: [successeurId], references: [id], onDelete: Cascade)
+  decalageJours  Int           @default(0)
+
+  @@unique([predecesseurId, successeurId])
+}
+
+// ───────────── Rapports journaliers ─────────────
+
+enum Meteo {
+  ENSOLEILLE
+  NUAGEUX
+  PLUIE
+  FORTE_PLUIE
+  VENT_FORT
+  HARMATTAN
+  CHALEUR_EXTREME
+}
+
+enum StatutRapport {
+  BROUILLON
+  SOUMIS
+  VALIDE
+}
+
+model RapportJournalier {
+  id                 String      @id @default(cuid())
+  chantierId         String
+  chantier           Chantier    @relation(fields: [chantierId], references: [id], onDelete: Cascade)
+  date               DateTime    @db.Date
+  redacteurId        String
+  redacteur          Utilisateur @relation("RapportRedacteur", fields: [redacteurId], references: [id])
+  meteo              Meteo?
+  meteoDetails       String?
+  effectifTotal      Int         @default(0)
+  heuresTravaillees  Decimal     @default(0) @db.Decimal(10, 2)
+  // Listes saisies dans le formulaire (validées côté serveur, voir lib/rapports.ts)
+  personnel          Json        @default("[]") // [{ specialite, nombre, heures }]
+  travaux            Json        @default("[]") // [{ designation, unite, quantite, tacheId, avancement }]
+  materiauxConsommes Json        @default("[]") // [{ designation, unite, quantite }]
+  materiauxLivres    Json        @default("[]") // [{ designation, unite, quantite, fournisseur }]
+  materiel           Json        @default("[]") // [{ designation, heures, etat }]
+  travauxRealises    String?
+  incidents          String?
+  difficultes        String?
+  instructions       String?
+  observations       String?
+
+  statut              StatutRapport @default(BROUILLON)
+  soumisLe            DateTime?
+  validePar           String?
+  validateur          Utilisateur?  @relation("RapportValidePar", fields: [validePar], references: [id])
+  valideLe            DateTime?
+  empreinteValidation String? // SHA-256 du contenu au moment de la validation
+  motifRenvoi         String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  documents Document[]
+
+  @@unique([chantierId, date])
+  @@index([statut])
+}
+
+// ───────────── Documents ─────────────
+
+enum CategorieDocument {
+  CONTRAT
+  MARCHE
+  PLAN
+  DEVIS
+  FACTURE
+  BON_COMMANDE
+  BON_LIVRAISON
+  RAPPORT
+  ATTACHEMENT
+  SITUATION
+  PROCES_VERBAL
+  ADMINISTRATIF
+  QHSE
+  PHOTO
+  DOSSIER_RECEPTION
+  AUTRE
+}
+
+enum StatutVersion {
+  EN_ATTENTE // soumise à approbation (plans, contrats, marchés, PV)
+  APPROUVE
+  EN_VIGUEUR // catégories sans approbation : en vigueur dès le dépôt
+  REMPLACE
+  REJETE
+}
+
+model Document {
+  id             String            @id @default(cuid())
+  categorie      CategorieDocument
+  titre          String
+  reference      String? // ex. numéro de plan
+  lot            String?
+  description    String?
+  dateValidite   DateTime?         @db.Date
+  // Rôles du portail autorisés à consulter la version en vigueur (si leur accès portail au chantier est ouvert)
+  partageExterne Role[]
+  archive        Boolean           @default(false)
+
+  chantierId String?
+  chantier   Chantier?          @relation(fields: [chantierId], references: [id], onDelete: Cascade)
+  devisId    String?
+  devis      Devis?             @relation(fields: [devisId], references: [id], onDelete: SetNull)
+  rapportId  String?
+  rapport    RapportJournalier? @relation(fields: [rapportId], references: [id], onDelete: SetNull)
+
+  creePar   String
+  createur  Utilisateur @relation("DocumentCreePar", fields: [creePar], references: [id])
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  versions VersionDocument[]
+
+  @@index([chantierId, categorie])
+  @@index([devisId])
+  @@index([rapportId])
+}
+
+model VersionDocument {
+  id          String        @id @default(cuid())
+  documentId  String
+  document    Document      @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  numero      Int
+  indice      String?
+  statut      StatutVersion
+  fichierId   String        @unique
+  fichier     Fichier       @relation(fields: [fichierId], references: [id])
+  nomFichier  String
+  mime        String
+  taille      Int
+  empreinte   String // SHA-256 du fichier
+  commentaire String?
+  deposePar   String
+  deposant    Utilisateur   @relation("VersionDeposeePar", fields: [deposePar], references: [id])
+  deposeLe    DateTime      @default(now())
+  decidePar   String?
+  decideur    Utilisateur?  @relation("VersionDecideePar", fields: [decidePar], references: [id])
+  decideLe    DateTime?
+  motif       String?
+  remplaceLe  DateTime?
+
+  @@unique([documentId, numero])
+}
+
+/**
+ * Contenu binaire, séparé pour que les listes ne chargent jamais les fichiers.
+ */
+model Fichier {
+  id        String           @id @default(cuid())
+  contenu   Bytes
+  createdAt DateTime         @default(now())
+  version   VersionDocument?
 }

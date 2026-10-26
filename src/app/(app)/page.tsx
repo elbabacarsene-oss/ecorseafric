@@ -2,14 +2,15 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { GraphiqueChantiers, type PointChantier } from "@/components/GraphiqueChantiers";
 import { EnTetePage } from "@/components/ui";
-import { filtreChantiers } from "@/lib/acces";
+import { filtreChantiers, filtreDevis, filtreDocuments } from "@/lib/acces";
+import { totauxDevis } from "@/lib/devis-calculs";
 import { exigerUtilisateur } from "@/lib/auth";
 import {
   budgetReference, estEnRetard, joursDeRetard, margePrevisionnelle, montantMarcheActualise, STATUTS_ACTIFS, totalAvenantsApprouves,
 } from "@/lib/calculs";
 import { db } from "@/lib/db";
-import { aujourdhuiDakar, formatDate, formatNombre, formatXOF } from "@/lib/format";
-import { portee, peut } from "@/lib/permissions";
+import { ajouterJours, aujourdhuiDakar, formatDate, formatNombre, formatXOF } from "@/lib/format";
+import { portee, peut, type Action, type Module } from "@/lib/permissions";
 
 export const metadata = { title: "Tableau de bord" };
 
@@ -66,6 +67,23 @@ export default async function TableauDeBord() {
     : [];
   const sansDateFin = actifs.filter((c) => !c.dateFinContractuelle);
 
+  // Étape 2 : validations en attente et alertes, limitées au périmètre de l'utilisateur
+  const peutP = (m: Module, a: Action) => portee(user.role, m, a) !== null;
+  const chantiersDe = (m: Module, a: Action = "lire") => filtreChantiers(user, a, m) ?? { id: "__aucun__" };
+  const [devisAValider, budgetsAValider, rapportsAValider, versionsAApprouver, tachesRetard, docsExpires, devisEnCours, rapportsDuJour] = await Promise.all([
+    peutP("devis", "approuver") ? db.devis.findMany({ where: { AND: [filtreDevis(user, "approuver")!, { statut: "SOUMIS", preparePar: { not: user.id } }] }, select: { id: true, numero: true, variante: true, version: true } }) : [],
+    peutP("budgets", "approuver") ? db.chantier.findMany({ where: { AND: [chantiersDe("budgets", "approuver"), { budgetStatut: "SOUMIS", budgetPreparePar: { not: user.id } }] }, select: { id: true, code: true } }) : [],
+    peutP("rapports", "approuver") ? db.rapportJournalier.findMany({ where: { statut: "SOUMIS", redacteurId: { not: user.id }, chantier: chantiersDe("rapports", "approuver") }, select: { id: true, date: true, chantier: { select: { code: true } } }, orderBy: { date: "asc" }, take: 10 }) : [],
+    peutP("documents", "approuver") ? db.versionDocument.findMany({ where: { statut: "EN_ATTENTE", deposePar: { not: user.id }, document: filtreDocuments(user, "approuver")! }, select: { id: true, numero: true, document: { select: { id: true, titre: true } } }, take: 10 }) : [],
+    peutP("planning", "lire") ? db.tachePlanning.findMany({ where: { chantier: { AND: [chantiersDe("planning"), { statut: { in: STATUTS_ACTIFS } }] }, finPrevue: { lt: auj }, avancement: { lt: 100 }, finReelle: null, enfants: { none: {} } }, select: { id: true, nom: true, importante: true, finPrevue: true, chantier: { select: { id: true, code: true } } }, orderBy: { finPrevue: "asc" } }) : [],
+    peutP("documents", "lire") && !user.externe ? db.document.findMany({ where: { AND: [filtreDocuments(user)!, { archive: false, dateValidite: { lt: ajouterJours(auj, 15) } }] }, select: { id: true, titre: true, dateValidite: true }, orderBy: { dateValidite: "asc" }, take: 10 }) : [],
+    peutP("devis", "lire") ? db.devis.findMany({ where: { AND: [filtreDevis(user)!, { statut: { in: ["BROUILLON", "SOUMIS", "VALIDE", "ENVOYE"] } }] }, select: { statut: true, tauxFraisChantier: true, tauxFraisGeneraux: true, tauxMarge: true, lignes: { select: { lot: true, quantite: true, debourseSecUnitaire: true, prixUnitaireImpose: true } } } }) : null,
+    peutP("rapports", "lire") ? db.rapportJournalier.count({ where: { date: auj, chantier: chantiersDe("rapports") } }) : null,
+  ]);
+  const importantesEnRetard = tachesRetard.filter((t) => t.importante);
+  const devisEnvoyes = devisEnCours?.filter((d) => d.statut === "ENVOYE") ?? [];
+  const nbUrgences = avenantsEnAttente.length + enRetard.length + sansDateFin.length + devisAValider.length + budgetsAValider.length + rapportsAValider.length + versionsAApprouver.length + importantesEnRetard.length + docsExpires.length;
+
   const graph: PointChantier[] = chantiers
     .filter((c) => c.statut !== "CLOTURE")
     .map((c) => ({ code: c.code, nom: c.nom, marche: montantMarcheActualise(c), budget: budgetReference(c) }))
@@ -89,6 +107,20 @@ export default async function TableauDeBord() {
         <Tuile titre="En retard" valeur={formatNombre(enRetard.length)} detail="Fin actualisée dépassée" href="/chantiers?retard=1" />
         <TuileAVenir titre="Salariés présents" etape={3} />
       </div>
+
+      {(devisEnCours || rapportsDuJour !== null || peutP("planning", "lire")) && (
+        <>
+          <h2 className="mb-2">Études et travaux</h2>
+          <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {devisEnCours && <Tuile titre="Devis en cours" valeur={formatNombre(devisEnCours.length)} detail="Brouillon, soumis, validés ou envoyés" href="/devis" />}
+            {devisEnCours && peut(user.role, "devis_couts", "lire") && (
+              <Tuile titre="Devis envoyés en attente" valeur={formatXOF(devisEnvoyes.reduce((s, d) => s + totauxDevis(d.lignes, d).totalHT, 0))} detail={`${devisEnvoyes.length} devis, montant HT`} href="/devis?statut=ENVOYE" />
+            )}
+            {peutP("planning", "lire") && <Tuile titre="Tâches en retard" valeur={formatNombre(tachesRetard.length)} detail={`dont ${importantesEnRetard.length} importante(s)`} />}
+            {rapportsDuJour !== null && <Tuile titre="Rapports du jour" valeur={formatNombre(rapportsDuJour)} detail={`${rapportsAValider.length} rapport(s) à valider`} href="/rapports" />}
+          </div>
+        </>
+      )}
 
       {(voirMarche || voirBudget) && (
         <>
@@ -140,10 +172,40 @@ export default async function TableauDeBord() {
 
         <section className="carte">
           <h2 className="mb-3">Actions urgentes</h2>
-          {avenantsEnAttente.length === 0 && enRetard.length === 0 && sansDateFin.length === 0 ? (
+          {nbUrgences === 0 ? (
             <p className="text-sm text-slate-500">Aucune action urgente.</p>
           ) : (
             <ul className="space-y-2 text-sm">
+              {importantesEnRetard.map((t) => (
+                <li key={t.id} className="rounded-lg bg-rose-50 p-2">
+                  <Link className="lien" href={`/chantiers/${t.chantier.id}/planning#tache-${t.id}`}>{t.chantier.code}</Link> : tâche importante « {t.nom} » en retard depuis le {formatDate(t.finPrevue)}
+                </li>
+              ))}
+              {devisAValider.map((d) => (
+                <li key={d.id} className="rounded-lg bg-amber-50 p-2">
+                  Devis <Link className="lien" href={`/devis/${d.id}`}>{d.numero}-{d.variante} v{d.version}</Link> à valider
+                </li>
+              ))}
+              {budgetsAValider.map((c) => (
+                <li key={c.id} className="rounded-lg bg-amber-50 p-2">
+                  <Link className="lien" href={`/chantiers/${c.id}/budget`}>{c.code}</Link> : budget à valider
+                </li>
+              ))}
+              {rapportsAValider.map((r) => (
+                <li key={r.id} className="rounded-lg bg-amber-50 p-2">
+                  <Link className="lien" href={`/rapports/${r.id}`}>{r.chantier.code}</Link> : rapport du {formatDate(r.date)} à valider
+                </li>
+              ))}
+              {versionsAApprouver.map((v) => (
+                <li key={v.id} className="rounded-lg bg-amber-50 p-2">
+                  <Link className="lien" href={`/documents/${v.document.id}`}>{v.document.titre}</Link> : version n°{v.numero} à approuver
+                </li>
+              ))}
+              {docsExpires.map((d) => (
+                <li key={d.id} className="rounded-lg bg-slate-50 p-2">
+                  <Link className="lien" href={`/documents/${d.id}`}>{d.titre}</Link> : {d.dateValidite! < auj ? "expiré" : "expire"} le {formatDate(d.dateValidite)}
+                </li>
+              ))}
               {avenantsEnAttente.map((a) => (
                 <li key={a.id} className="rounded-lg bg-amber-50 p-2">
                   <Link className="lien" href={`/chantiers/${a.chantier.id}`}>{a.chantier.code}</Link> : avenant n°{a.numero} ({formatXOF(a.montant)}) à approuver

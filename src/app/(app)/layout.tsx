@@ -14,10 +14,15 @@ export default async function LayoutApplication({ children }: { children: React.
   const liens: LienNav[] = [];
   if (peut(user.role, "tableau_de_bord", "lire")) liens.push({ href: "/", libelle: "Tableau de bord" });
   if (peut(user.role, "chantiers", "lire")) liens.push({ href: "/chantiers", libelle: user.externe ? "Mes chantiers" : "Chantiers", groupe: "Opérations" });
+  if (peut(user.role, "rapports", "lire")) liens.push({ href: "/rapports", libelle: "Rapports journaliers", groupe: "Opérations" });
+  if (peut(user.role, "documents", "lire")) liens.push({ href: "/documents", libelle: "Documents", groupe: "Opérations" });
   if (peut(user.role, "intervenants", "lire")) {
     liens.push({ href: "/intervenants", libelle: "Parties prenantes", groupe: "Opérations" });
     liens.push({ href: "/clients", libelle: "Clients", groupe: "Opérations" });
   }
+  if (peut(user.role, "devis", "lire")) liens.push({ href: "/devis", libelle: "Devis", groupe: "Études et budgets" });
+  if (peut(user.role, "bibliotheque", "lire")) liens.push({ href: "/bibliotheque", libelle: "Bibliothèque d'ouvrages", groupe: "Études et budgets" });
+  if (peut(user.role, "budgets", "lire")) liens.push({ href: "/budgets", libelle: "Budgets", groupe: "Études et budgets" });
   if (peut(user.role, "utilisateurs", "lire")) liens.push({ href: "/admin/utilisateurs", libelle: "Utilisateurs", groupe: "Administration" });
   if (peut(user.role, "entreprise", "lire") && !user.externe) liens.push({ href: "/admin/entreprise", libelle: "Entreprise", groupe: "Administration" });
   if (!user.externe) liens.push({ href: "/admin/permissions", libelle: "Matrice des permissions", groupe: "Administration" });

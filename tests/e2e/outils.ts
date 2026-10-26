@@ -6,6 +6,7 @@ import { MDP } from "./comptes";
 export const db = new PrismaClient({ datasources: { db: { url: URL_BASE_TEST } } });
 
 export async function connexion(page: Page, email: string, mdp = MDP) {
+  await page.context().clearCookies(); // repartir d'une session vierge
   await page.goto("/connexion");
   await page.getByLabel("Adresse e-mail").fill(email);
   await page.getByLabel("Mot de passe").fill(mdp);

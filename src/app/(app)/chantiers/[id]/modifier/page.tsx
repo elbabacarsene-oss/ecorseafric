@@ -15,6 +15,7 @@ export default async function PageModifierChantier({ params }: { params: Promise
   const { id } = await params;
   await exigerChantier(user, id, "modifier");
   const c = await db.chantier.findUniqueOrThrow({ where: { id } });
+  const budgetDetaille = (await db.ligneBudget.count({ where: { chantierId: id } })) > 0;
   // Les intervenants déjà désignés restent proposés même s'ils ont été désactivés, pour ne pas les effacer sans le vouloir.
   const actuels = ROLES_CLES.map((r) => c[r.champ]).filter((x): x is string => !!x);
   const intervenants = await db.intervenant.findMany({
@@ -27,7 +28,7 @@ export default async function PageModifierChantier({ params }: { params: Promise
       <EnTetePage titre={`Modifier ${c.code}`} sousTitre={c.nom} />
       <div className="carte">
         <FormulaireAction action={modifierChantier.bind(null, c.id)} libelle="Enregistrer les modifications">
-          <ChampsChantier c={c} intervenants={intervenants} peutMarche={peut(user.role, "chantiers_marche", "modifier")} peutBudget={peut(user.role, "chantiers_budget", "modifier")} />
+          <ChampsChantier c={c} intervenants={intervenants} peutMarche={peut(user.role, "chantiers_marche", "modifier")} peutBudget={peut(user.role, "chantiers_budget", "modifier")} budgetDetaille={budgetDetaille} />
         </FormulaireAction>
       </div>
     </>
