@@ -38,6 +38,12 @@ h3 { font-size: 1rem; margin: 0 0 .5rem; }
   .menu-mobile { display: inline-flex; }
 }
 
+/* Bandeau d'essai / abonnement */
+.bandeau { background: var(--bleu-clair); color: var(--bleu-fonce); padding: .6rem .9rem; border-radius: 8px; margin-bottom: 1rem; font-size: .9rem; border-left: 4px solid var(--bleu); }
+.bandeau.attention { background: var(--orange-clair); color: var(--orange); border-left-color: var(--orange); }
+.bandeau.alerte { background: var(--rouge-clair); color: var(--rouge); border-left-color: var(--rouge); }
+.bandeau a { font-weight: 600; margin-left: .4rem; }
+
 /* Composants */
 .btn { display: inline-flex; align-items: center; gap: .35rem; border: 1px solid var(--bleu); background: var(--bleu); color: #fff; padding: .5rem .95rem; border-radius: 8px; cursor: pointer; font-size: .9rem; text-decoration: none; font-family: inherit; }
 .btn:hover { background: var(--bleu-fonce); }

@@ -8,27 +8,33 @@ Cette première version couvre le **socle** (authentification, rôles, entrepris
 
 Les deux modules sont reliés : la **main-d'œuvre réelle** (pointages validés) est comparée à la **main-d'œuvre prévue** au déboursé sec de l'étude acceptée du chantier.
 
-## Démarrage
+## Fonctionnement du SaaS
+- **Inscription libre** : chaque entreprise crée son espace et en devient l'administrateur. Les espaces sont totalement isolés.
+- **Confirmation de l'e-mail** obligatoire avant d'accéder à l'espace ; **mot de passe oublié** par lien envoyé par e-mail (Brevo).
+- **Essai gratuit de 24 h**, qui démarre à la confirmation de l'e-mail.
+- **Abonnement payé par Wave** (1, 3, 6 ou 12 mois). Sans abonnement actif, l'espace passe en **lecture seule** : les données restent consultables, la saisie est bloquée.
 
-Prérequis : Node.js ≥ 22.5 (la base SQLite utilise le module intégré `node:sqlite`, sans dépendance native).
+## Démarrage en local
+
+Prérequis : Node.js ≥ 20 et PostgreSQL ≥ 14.
 
 ```bash
 npm install
-npm start            # http://localhost:3000
-npm test             # tests automatisés (formules, droits, isolation)
+createdb btp                                   # ou via psql
+DATABASE_URL=postgres://utilisateur:mdp@localhost:5432/btp npm start   # http://localhost:3000
+```
+Sans clé Brevo, les e-mails (lien de confirmation, réinitialisation) s'affichent dans la console du serveur. Sans clé Wave ni tarif, le paiement en ligne est désactivé.
+
+**Tests** (effacent la base de test à chaque lancement) :
+```bash
+createdb btp_test
+DATABASE_URL_TEST=postgres://utilisateur:mdp@localhost:5432/btp_test npm test
 ```
 
-**SaaS ouvert** : n'importe quelle entreprise crée son propre espace depuis la page de connexion (« Créer un espace gratuitement ») et en devient l'administrateur. Chaque espace est totalement isolé des autres (chantiers, personnel, prix, études, logo). Les créations d'espace sont limitées à 5 par heure et par adresse IP.
+Toutes les variables de configuration sont décrites dans [.env.example](.env.example).
 
-| Variable | Défaut | Rôle |
-|---|---|---|
-| `PORT` | 3000 | Port HTTP |
-| `DB_FILE` | `data/btp.db` | Fichier de base de données |
-| `COOKIE_SECURE` | 0 | Mettre `1` derrière HTTPS (obligatoire en production) |
-| `INSCRIPTION_OUVERTE` | 1 | Mettre `0` pour interdire la création de nouveaux espaces |
-| `NOM_PRODUIT` | BTP Manager 360 | Nom affiché sur la page de connexion et dans l'onglet |
-
-**Sauvegarde** : copier le fichier `data/btp.db` (par ex. `sqlite3 data/btp.db ".backup sauvegarde.db"` via une tâche planifiée).
+## Mise en production
+Docker + PostgreSQL : voir [docs/DEPLOIEMENT.md](docs/DEPLOIEMENT.md).
 
 **Logos** : chaque entreprise importe le sien (PNG, JPEG ou WebP, 300 Ko max.) dans « Utilisateurs & paramètres ». `public/logo.svg` est le logo du produit, affiché sur la page de connexion.
 

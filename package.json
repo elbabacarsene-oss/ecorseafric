@@ -4,13 +4,16 @@
   "description": "SaaS BTP : pointage du personnel et déboursés secs (ECORSE AFRIC BTP MANAGER 360)",
   "main": "src/server.js",
   "private": true,
-  "engines": { "node": ">=22.5" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "start": "node --no-warnings=ExperimentalWarning src/server.js",
-    "dev": "node --no-warnings=ExperimentalWarning --watch src/server.js",
-    "test": "node --no-warnings=ExperimentalWarning --test \"test/*.test.js\""
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "NODE_ENV=test node --test --test-concurrency=1 \"test/*.test.js\""
   },
   "dependencies": {
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "pg": "^8.23.1"
   }
 }

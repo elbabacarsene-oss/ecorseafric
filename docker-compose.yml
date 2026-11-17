@@ -1,0 +1,33 @@
+# Déploiement sur un serveur (VPS) : application + PostgreSQL.
+# 1. cp .env.example .env  puis remplir les valeurs
+# 2. docker compose up -d --build
+# Placer un proxy HTTPS devant le port 3000 (Caddy, Nginx…) : voir docs/DEPLOIEMENT.md
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: btp
+      POSTGRES_USER: btp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Définir POSTGRES_PASSWORD dans .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U btp -d btp"]
+      interval: 10s
+      retries: 5
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://btp:${POSTGRES_PASSWORD}@db:5432/btp
+    ports:
+      - "127.0.0.1:3000:3000"
+
+volumes:
+  pgdata:

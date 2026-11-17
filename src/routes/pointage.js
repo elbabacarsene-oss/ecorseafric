@@ -1,17 +1,17 @@
 'use strict';
 const express = require('express');
 const { requirePerm, can } = require('../auth');
-const { tx } = require('../db');
-const { HttpError, chargerChantier, filtreChantiers, audit, texte, nombre, date, choix, aujourdhuiDakar, csv } = require('../util');
+const { HttpError, id, chargerChantier, filtreChantiers, audit, texte, nombre, date, choix, aujourdhuiDakar, csv } = require('../util');
 const { coutPointage, normaliserHeures, round } = require('../calc');
 
 const PRESENCES = ['present', 'absent', 'demi_journee', 'conge', 'maladie', 'absence_autorisee'];
 const COUT_SQL = `p.taux_horaire * (p.heures_normales + p.heures_sup * (1 + p.majoration_hs_pct/100.0))`;
+const TRAVAILLE = (p) => p.presence === 'present' || p.presence === 'demi_journee';
 
 // Retire les informations salariales pour les rôles qui n'y ont pas droit
 const masquer = (user, o) => {
   if (can(user, 'cout.lire')) return o;
-  const { taux_horaire, cout, majoration_hs_pct, ...reste } = o;
+  const { taux_horaire, taux_actuel, cout, majoration_hs_pct, ...reste } = o;
   return reste;
 };
 
@@ -19,13 +19,14 @@ module.exports = function pointageRoutes(db) {
   const r = express.Router();
 
   // ================= Personnel =================
-  r.get('/ouvriers', requirePerm('personnel.lire'), (req, res) => {
-    let sql = 'SELECT o.*, (SELECT json_group_array(chantier_id) FROM affectations WHERE ouvrier_id = o.id) AS chantiers FROM ouvriers o WHERE o.org_id = ?';
+  r.get('/ouvriers', requirePerm('personnel.lire'), async (req, res) => {
+    let sql = `SELECT o.*, COALESCE((SELECT json_agg(chantier_id) FROM affectations WHERE ouvrier_id = o.id), '[]'::json) AS chantiers
+      FROM ouvriers o WHERE o.org_id = ?`;
     const params = [req.user.org_id];
     if (req.query.actif !== undefined && req.query.actif !== '') { sql += ' AND o.actif = ?'; params.push(req.query.actif === '1' ? 1 : 0); }
-    if (req.query.q) { sql += ' AND (o.nom LIKE ? OR o.prenom LIKE ? OR o.matricule LIKE ? OR o.metier LIKE ?)'; const q = `%${req.query.q}%`; params.push(q, q, q, q); }
+    if (req.query.q) { sql += ' AND (o.nom ILIKE ? OR o.prenom ILIKE ? OR o.matricule ILIKE ? OR o.metier ILIKE ?)'; const q = `%${req.query.q}%`; params.push(q, q, q, q); }
     sql += ' ORDER BY o.nom, o.prenom';
-    res.json(db.prepare(sql).all(...params).map((o) => masquer(req.user, { ...o, chantiers: JSON.parse(o.chantiers) })));
+    res.json((await db.all(sql, ...params)).map((o) => masquer(req.user, o)));
   });
 
   const lireOuvrier = (b, ex = {}) => {
@@ -42,46 +43,45 @@ module.exports = function pointageRoutes(db) {
     };
   };
 
-  r.post('/ouvriers', requirePerm('personnel.ecrire'), (req, res) => {
+  r.post('/ouvriers', requirePerm('personnel.ecrire'), async (req, res) => {
     const o = lireOuvrier(req.body);
-    if (db.prepare('SELECT 1 FROM ouvriers WHERE org_id = ? AND matricule = ?').get(req.user.org_id, o.matricule)) throw new HttpError(409, `Le matricule ${o.matricule} existe déjà.`);
-    const ins = db.prepare('INSERT INTO ouvriers (org_id, matricule, nom, prenom, metier, categorie, telephone, taux_horaire, actif) VALUES (?,?,?,?,?,?,?,?,?)')
-      .run(req.user.org_id, o.matricule, o.nom, o.prenom, o.metier, o.categorie, o.telephone, o.taux_horaire, o.actif);
-    audit(db, req.user, 'creation', 'ouvrier', ins.lastInsertRowid, { matricule: o.matricule });
-    res.status(201).json({ id: Number(ins.lastInsertRowid) });
+    if (await db.get('SELECT 1 FROM ouvriers WHERE org_id = ? AND matricule = ?', req.user.org_id, o.matricule)) throw new HttpError(409, `Le matricule ${o.matricule} existe déjà.`);
+    const nid = await db.insert('INSERT INTO ouvriers (org_id, matricule, nom, prenom, metier, categorie, telephone, taux_horaire, actif) VALUES (?,?,?,?,?,?,?,?,?)',
+      req.user.org_id, o.matricule, o.nom, o.prenom, o.metier, o.categorie, o.telephone, o.taux_horaire, o.actif);
+    await audit(db, req.user, 'creation', 'ouvrier', nid, { matricule: o.matricule });
+    res.status(201).json({ id: nid });
   });
 
-  r.patch('/ouvriers/:id', requirePerm('personnel.ecrire'), (req, res) => {
-    const ex = db.prepare('SELECT * FROM ouvriers WHERE id = ? AND org_id = ?').get(Number(req.params.id), req.user.org_id);
+  r.patch('/ouvriers/:id', requirePerm('personnel.ecrire'), async (req, res) => {
+    const ex = await db.get('SELECT * FROM ouvriers WHERE id = ? AND org_id = ?', id(req.params.id, 'Ouvrier'), req.user.org_id);
     if (!ex) throw new HttpError(404, 'Ouvrier introuvable.');
     const o = lireOuvrier(req.body, ex);
-    if (o.matricule !== ex.matricule && db.prepare('SELECT 1 FROM ouvriers WHERE org_id = ? AND matricule = ? AND id <> ?').get(req.user.org_id, o.matricule, ex.id)) {
+    if (o.matricule !== ex.matricule && await db.get('SELECT 1 FROM ouvriers WHERE org_id = ? AND matricule = ? AND id <> ?', req.user.org_id, o.matricule, ex.id)) {
       throw new HttpError(409, `Le matricule ${o.matricule} existe déjà.`);
     }
-    db.prepare('UPDATE ouvriers SET matricule=?, nom=?, prenom=?, metier=?, categorie=?, telephone=?, taux_horaire=?, actif=? WHERE id=?')
-      .run(o.matricule, o.nom, o.prenom, o.metier, o.categorie, o.telephone, o.taux_horaire, o.actif, ex.id);
-    audit(db, req.user, 'modification', 'ouvrier', ex.id, { avant: { taux_horaire: ex.taux_horaire }, apres: { taux_horaire: o.taux_horaire } });
+    await db.run('UPDATE ouvriers SET matricule=?, nom=?, prenom=?, metier=?, categorie=?, telephone=?, taux_horaire=?, actif=? WHERE id=?',
+      o.matricule, o.nom, o.prenom, o.metier, o.categorie, o.telephone, o.taux_horaire, o.actif, ex.id);
+    await audit(db, req.user, 'modification', 'ouvrier', ex.id, { avant: { taux_horaire: ex.taux_horaire }, apres: { taux_horaire: o.taux_horaire } });
     res.json({ ok: true });
   });
 
   // Affectation des ouvriers à un chantier
-  r.get('/chantiers/:id/ouvriers', requirePerm('personnel.lire'), (req, res) => {
-    const ch = chargerChantier(db, req.user, req.params.id);
-    res.json(db.prepare(`SELECT o.* FROM affectations a JOIN ouvriers o ON o.id = a.ouvrier_id
-      WHERE a.chantier_id = ? ORDER BY o.nom, o.prenom`).all(ch.id).map((o) => masquer(req.user, o)));
+  r.get('/chantiers/:id/ouvriers', requirePerm('personnel.lire'), async (req, res) => {
+    const ch = await chargerChantier(db, req.user, req.params.id);
+    res.json((await db.all(`SELECT o.* FROM affectations a JOIN ouvriers o ON o.id = a.ouvrier_id
+      WHERE a.chantier_id = ? ORDER BY o.nom, o.prenom`, ch.id)).map((o) => masquer(req.user, o)));
   });
 
-  r.put('/chantiers/:id/ouvriers', requirePerm('personnel.ecrire'), (req, res) => {
-    const ch = chargerChantier(db, req.user, req.params.id);
+  r.put('/chantiers/:id/ouvriers', requirePerm('personnel.ecrire'), async (req, res) => {
+    const ch = await chargerChantier(db, req.user, req.params.id);
     if (!Array.isArray(req.body.ouvrier_ids)) throw new HttpError(400, 'Liste ouvrier_ids attendue.');
-    const ids = [...new Set(req.body.ouvrier_ids.map(Number))];
-    tx(db, () => {
-      const chk = db.prepare('SELECT 1 FROM ouvriers WHERE id = ? AND org_id = ?');
-      for (const id of ids) if (!chk.get(id, req.user.org_id)) throw new HttpError(400, 'Ouvrier invalide.');
-      db.prepare('DELETE FROM affectations WHERE chantier_id = ?').run(ch.id);
-      const ins = db.prepare('INSERT INTO affectations (ouvrier_id, chantier_id) VALUES (?, ?)');
-      for (const id of ids) ins.run(id, ch.id);
-      audit(db, req.user, 'affectation', 'chantier', ch.id, { ouvrier_ids: ids });
+    const ids = [...new Set(req.body.ouvrier_ids.map((x) => id(x, 'Ouvrier')))];
+    await db.tx(async (t) => {
+      const n = ids.length ? (await t.get('SELECT COUNT(*) AS n FROM ouvriers WHERE org_id = ? AND id = ANY(?::int[])', req.user.org_id, ids)).n : 0;
+      if (n !== ids.length) throw new HttpError(400, 'Ouvrier invalide.');
+      await t.run('DELETE FROM affectations WHERE chantier_id = ?', ch.id);
+      for (const oid of ids) await t.run('INSERT INTO affectations (ouvrier_id, chantier_id) VALUES (?, ?)', oid, ch.id);
+      await audit(t, req.user, 'affectation', 'chantier', ch.id, { ouvrier_ids: ids });
     });
     res.json({ ok: true });
   });
@@ -89,10 +89,10 @@ module.exports = function pointageRoutes(db) {
   // ================= Pointage journalier =================
 
   // Feuille de pointage d'un chantier pour une date : ouvriers affectés + lignes déjà saisies
-  r.get('/chantiers/:id/pointage', requirePerm('pointage.lire'), (req, res) => {
-    const ch = chargerChantier(db, req.user, req.params.id);
+  r.get('/chantiers/:id/pointage', requirePerm('pointage.lire'), async (req, res) => {
+    const ch = await chargerChantier(db, req.user, req.params.id);
     const jour = date(req.query.date, 'Date') || aujourdhuiDakar();
-    const lignes = db.prepare(`
+    const lignes = (await db.all(`
       SELECT o.id AS ouvrier_id, o.matricule, o.nom, o.prenom, o.metier, o.taux_horaire AS taux_actuel, o.actif,
         p.id, p.presence, p.heures_normales, p.heures_sup, p.observation, p.statut, p.taux_horaire, p.majoration_hs_pct,
         p.motif_rejet, p.saisi_le, us.nom AS saisi_par_nom, uv.nom AS valide_par_nom, p.saisi_par
@@ -103,125 +103,119 @@ module.exports = function pointageRoutes(db) {
       WHERE o.org_id = ? AND (
         (o.actif = 1 AND o.id IN (SELECT ouvrier_id FROM affectations WHERE chantier_id = ?))
         OR p.id IS NOT NULL)
-      ORDER BY o.nom, o.prenom`).all(ch.id, jour, req.user.org_id, ch.id)
-      .map((l) => {
-        const out = { ...l, cout: l.id ? round(coutPointage(l)) : null };
-        if (!can(req.user, 'cout.lire')) { delete out.taux_actuel; }
-        return masquer(req.user, out);
-      });
-    const org = db.prepare('SELECT heures_jour_standard, majoration_hs_pct FROM organisations WHERE id = ?').get(req.user.org_id);
+      ORDER BY o.nom, o.prenom`, ch.id, jour, req.user.org_id, ch.id))
+      .map((l) => masquer(req.user, { ...l, cout: l.id ? round(coutPointage(l)) : null }));
+    const org = await db.get('SELECT heures_jour_standard, majoration_hs_pct FROM organisations WHERE id = ?', req.user.org_id);
     res.json({ chantier: { id: ch.id, code: ch.code, nom: ch.nom }, date: jour, heures_jour_standard: org.heures_jour_standard, lignes });
   });
 
   // Enregistrement (création ou correction) de la feuille de pointage
-  r.put('/chantiers/:id/pointage', requirePerm('pointage.saisir'), (req, res) => {
-    const ch = chargerChantier(db, req.user, req.params.id);
+  r.put('/chantiers/:id/pointage', requirePerm('pointage.saisir'), async (req, res) => {
+    const ch = await chargerChantier(db, req.user, req.params.id);
     const jour = date(req.body.date, 'Date', { requis: true });
     if (jour > aujourdhuiDakar()) throw new HttpError(400, 'Impossible de pointer une date future.');
     if (!Array.isArray(req.body.lignes) || req.body.lignes.length === 0) throw new HttpError(400, 'Aucune ligne de pointage.');
-    const org = db.prepare('SELECT * FROM organisations WHERE id = ?').get(req.user.org_id);
+    if (req.body.lignes.length > 500) throw new HttpError(400, 'Trop de lignes dans une seule feuille.');
+    const org = await db.get('SELECT * FROM organisations WHERE id = ?', req.user.org_id);
 
     const resultat = { enregistrees: 0, ignorees: [] };
-    tx(db, () => {
-      const affecte = db.prepare(`SELECT o.* FROM ouvriers o JOIN affectations a ON a.ouvrier_id = o.id
-        WHERE o.id = ? AND a.chantier_id = ? AND o.org_id = ? AND o.actif = 1`);
-      const existant = db.prepare('SELECT * FROM pointages WHERE ouvrier_id = ? AND chantier_id = ? AND date = ?');
-      const heuresAilleurs = db.prepare(`SELECT COALESCE(SUM(heures_normales + heures_sup), 0) AS h FROM pointages
-        WHERE ouvrier_id = ? AND date = ? AND chantier_id <> ?`);
-      const ins = db.prepare(`INSERT INTO pointages (org_id, chantier_id, ouvrier_id, date, presence, heures_normales, heures_sup,
-        taux_horaire, majoration_hs_pct, observation, saisi_par) VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
-      const upd = db.prepare(`UPDATE pointages SET presence=?, heures_normales=?, heures_sup=?, taux_horaire=?, majoration_hs_pct=?,
-        observation=?, statut='saisi', saisi_par=?, saisi_le=datetime('now'), valide_par=NULL, valide_le=NULL, motif_rejet=NULL WHERE id=?`);
-
+    await db.tx(async (t) => {
       for (const l of req.body.lignes) {
-        const o = affecte.get(Number(l.ouvrier_id), ch.id, req.user.org_id);
+        const o = await t.get(`SELECT o.* FROM ouvriers o JOIN affectations a ON a.ouvrier_id = o.id
+          WHERE o.id = ? AND a.chantier_id = ? AND o.org_id = ? AND o.actif = 1`, id(l.ouvrier_id, 'Ouvrier'), ch.id, req.user.org_id);
         if (!o) throw new HttpError(400, `Ouvrier ${l.ouvrier_id} non affecté à ce chantier ou inactif.`);
         const presence = choix(l.presence, 'Présence', PRESENCES);
         const h = normaliserHeures(presence,
           nombre(l.heures_normales, 'Heures normales', { min: 0, max: 24 }),
           nombre(l.heures_sup, 'Heures supplémentaires', { min: 0, max: 24 }), org.heures_jour_standard);
-        const total = h.heures_normales + h.heures_sup + heuresAilleurs.get(o.id, jour, ch.id).h;
-        if (total > 24) throw new HttpError(400, `${o.nom} ${o.prenom || ''} : plus de 24 h pointées le ${jour} (tous chantiers confondus).`);
+        // Verrou sur l'ouvrier : deux saisies simultanées ne peuvent pas dépasser 24 h à elles deux
+        await t.run('SELECT 1 FROM ouvriers WHERE id = ? FOR UPDATE', o.id);
+        const ailleurs = (await t.get(`SELECT COALESCE(SUM(heures_normales + heures_sup), 0) AS h FROM pointages
+          WHERE ouvrier_id = ? AND date = ? AND chantier_id <> ?`, o.id, jour, ch.id)).h;
+        if (h.heures_normales + h.heures_sup + ailleurs > 24) throw new HttpError(400, `${o.nom} ${o.prenom || ''} : plus de 24 h pointées le ${jour} (tous chantiers confondus).`);
         const obs = texte(l.observation, 'Observation', { max: 300 });
-        const ex = existant.get(o.id, ch.id, jour);
+        const ex = await t.get('SELECT * FROM pointages WHERE ouvrier_id = ? AND chantier_id = ? AND date = ? FOR UPDATE', o.id, ch.id, jour);
         if (ex && ex.statut === 'valide') { resultat.ignorees.push({ ouvrier_id: o.id, raison: 'Pointage déjà validé' }); continue; }
         if (ex) {
-          upd.run(presence, h.heures_normales, h.heures_sup, o.taux_horaire, org.majoration_hs_pct, obs, req.user.id, ex.id);
+          await t.run(`UPDATE pointages SET presence=?, heures_normales=?, heures_sup=?, taux_horaire=?, majoration_hs_pct=?,
+            observation=?, statut='saisi', saisi_par=?, saisi_le=now(), valide_par=NULL, valide_le=NULL, motif_rejet=NULL WHERE id=?`,
+            presence, h.heures_normales, h.heures_sup, o.taux_horaire, org.majoration_hs_pct, obs, req.user.id, ex.id);
         } else {
-          ins.run(req.user.org_id, ch.id, o.id, jour, presence, h.heures_normales, h.heures_sup, o.taux_horaire, org.majoration_hs_pct, obs, req.user.id);
+          await t.run(`INSERT INTO pointages (org_id, chantier_id, ouvrier_id, date, presence, heures_normales, heures_sup,
+            taux_horaire, majoration_hs_pct, observation, saisi_par) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+            req.user.org_id, ch.id, o.id, jour, presence, h.heures_normales, h.heures_sup, o.taux_horaire, org.majoration_hs_pct, obs, req.user.id);
         }
         resultat.enregistrees++;
       }
-      audit(db, req.user, 'saisie_pointage', 'chantier', ch.id, { date: jour, lignes: resultat.enregistrees });
+      await audit(t, req.user, 'saisie_pointage', 'chantier', ch.id, { date: jour, lignes: resultat.enregistrees });
     });
     res.json(resultat);
   });
 
   // Validation ou rejet. Principe des quatre yeux : on ne valide pas sa propre saisie (sauf administrateur).
-  r.post('/chantiers/:id/pointage/validation', requirePerm('pointage.valider'), (req, res) => {
-    const ch = chargerChantier(db, req.user, req.params.id);
+  r.post('/chantiers/:id/pointage/validation', requirePerm('pointage.valider'), async (req, res) => {
+    const ch = await chargerChantier(db, req.user, req.params.id);
     const jour = date(req.body.date, 'Date', { requis: true });
     const action = choix(req.body.action, 'Action', ['valider', 'rejeter']);
     const motif = texte(req.body.motif, 'Motif', { max: 300, requis: action === 'rejeter' });
     const filtreIds = Array.isArray(req.body.ids) ? req.body.ids.map(Number) : null;
 
     const resultat = { traitees: 0, ignorees: [] };
-    tx(db, () => {
-      const lignes = db.prepare(`SELECT * FROM pointages WHERE chantier_id = ? AND date = ? AND statut = 'saisi'`).all(ch.id, jour)
+    await db.tx(async (t) => {
+      const lignes = (await t.all(`SELECT * FROM pointages WHERE chantier_id = ? AND date = ? AND statut = 'saisi' FOR UPDATE`, ch.id, jour))
         .filter((p) => !filtreIds || filtreIds.includes(p.id));
-      const upd = db.prepare(`UPDATE pointages SET statut = ?, valide_par = ?, valide_le = datetime('now'), motif_rejet = ? WHERE id = ?`);
       for (const p of lignes) {
         if (p.saisi_par === req.user.id && req.user.role !== 'admin') {
           resultat.ignorees.push({ id: p.id, raison: 'Vous ne pouvez pas valider votre propre saisie.' });
           continue;
         }
-        upd.run(action === 'valider' ? 'valide' : 'rejete', req.user.id, action === 'rejeter' ? motif : null, p.id);
+        await t.run(`UPDATE pointages SET statut = ?, valide_par = ?, valide_le = now(), motif_rejet = ? WHERE id = ?`,
+          action === 'valider' ? 'valide' : 'rejete', req.user.id, action === 'rejeter' ? motif : null, p.id);
         resultat.traitees++;
       }
-      audit(db, req.user, action === 'valider' ? 'validation_pointage' : 'rejet_pointage', 'chantier', ch.id, { date: jour, lignes: resultat.traitees, motif });
+      await audit(t, req.user, action === 'valider' ? 'validation_pointage' : 'rejet_pointage', 'chantier', ch.id, { date: jour, lignes: resultat.traitees, motif });
     });
     res.json(resultat);
   });
 
   // Déverrouillage d'un pointage validé (correction) : réservé à la direction et à l'administrateur
-  r.post('/pointages/:id/deverrouiller', requirePerm('pointage.valider'), (req, res) => {
+  r.post('/pointages/:id/deverrouiller', requirePerm('pointage.valider'), async (req, res) => {
     if (!['admin', 'direction'].includes(req.user.role)) throw new HttpError(403, 'Réservé à la direction.');
-    const p = db.prepare('SELECT * FROM pointages WHERE id = ? AND org_id = ?').get(Number(req.params.id), req.user.org_id);
+    const p = await db.get('SELECT * FROM pointages WHERE id = ? AND org_id = ?', id(req.params.id, 'Pointage'), req.user.org_id);
     if (!p) throw new HttpError(404, 'Pointage introuvable.');
     const motif = texte(req.body.motif, 'Motif', { requis: true, max: 300 });
-    db.prepare(`UPDATE pointages SET statut = 'saisi', valide_par = NULL, valide_le = NULL WHERE id = ?`).run(p.id);
-    audit(db, req.user, 'deverrouillage_pointage', 'pointage', p.id, { motif, avant: p });
+    await db.run(`UPDATE pointages SET statut = 'saisi', valide_par = NULL, valide_le = NULL WHERE id = ?`, p.id);
+    await audit(db, req.user, 'deverrouillage_pointage', 'pointage', p.id, { motif, avant: p });
     res.json({ ok: true });
   });
 
   // ================= Consultation, coûts et exports =================
-  function requetePointages(req) {
-    const f = filtreChantiers(db, req.user, 'p.chantier_id');
+  async function requetePointages(req) {
+    const f = await filtreChantiers(db, req.user, 'p.chantier_id');
     const params = [req.user.org_id, ...f.params];
     let where = `p.org_id = ?${f.sql}`;
     const du = date(req.query.du, 'Du'); const au = date(req.query.au, 'Au');
     if (du) { where += ' AND p.date >= ?'; params.push(du); }
     if (au) { where += ' AND p.date <= ?'; params.push(au); }
-    if (req.query.chantier_id) { where += ' AND p.chantier_id = ?'; params.push(Number(req.query.chantier_id)); }
-    if (req.query.ouvrier_id) { where += ' AND p.ouvrier_id = ?'; params.push(Number(req.query.ouvrier_id)); }
+    if (req.query.chantier_id) { where += ' AND p.chantier_id = ?'; params.push(id(req.query.chantier_id, 'Chantier')); }
+    if (req.query.ouvrier_id) { where += ' AND p.ouvrier_id = ?'; params.push(id(req.query.ouvrier_id, 'Ouvrier')); }
     if (req.query.statut) { where += ' AND p.statut = ?'; params.push(choix(req.query.statut, 'Statut', ['saisi', 'valide', 'rejete'])); }
     return { where, params };
   }
 
-  const listePointages = (req) => {
-    const { where, params } = requetePointages(req);
-    return db.prepare(`SELECT p.*, c.code AS chantier_code, c.nom AS chantier_nom, o.matricule, o.nom, o.prenom, o.metier,
+  const listePointages = async (req) => {
+    const { where, params } = await requetePointages(req);
+    return (await db.all(`SELECT p.*, c.code AS chantier_code, c.nom AS chantier_nom, o.matricule, o.nom, o.prenom, o.metier,
         ${COUT_SQL} AS cout, us.nom AS saisi_par_nom, uv.nom AS valide_par_nom
       FROM pointages p JOIN chantiers c ON c.id = p.chantier_id JOIN ouvriers o ON o.id = p.ouvrier_id
       LEFT JOIN users us ON us.id = p.saisi_par LEFT JOIN users uv ON uv.id = p.valide_par
-      WHERE ${where} ORDER BY p.date DESC, c.code, o.nom LIMIT 5000`).all(...params)
-      .map((p) => masquer(req.user, { ...p, cout: PRESENCES_COUT(p) ? round(p.cout) : 0 }));
+      WHERE ${where} ORDER BY p.date DESC, c.code, o.nom LIMIT 5000`, ...params))
+      .map((p) => masquer(req.user, { ...p, cout: TRAVAILLE(p) ? round(p.cout) : 0 }));
   };
-  const PRESENCES_COUT = (p) => p.presence === 'present' || p.presence === 'demi_journee';
 
-  r.get('/pointages', requirePerm('pointage.lire'), (req, res) => res.json(listePointages(req)));
+  r.get('/pointages', requirePerm('pointage.lire'), async (req, res) => res.json(await listePointages(req)));
 
-  r.get('/pointages/export.csv', requirePerm('pointage.lire'), (req, res) => {
+  r.get('/pointages/export.csv', requirePerm('pointage.lire'), async (req, res) => {
     const cols = [
       { titre: 'Date', valeur: 'date' }, { titre: 'Chantier', valeur: 'chantier_code' },
       { titre: 'Matricule', valeur: 'matricule' }, { titre: 'Nom', valeur: (p) => `${p.nom} ${p.prenom || ''}`.trim() },
@@ -232,22 +226,22 @@ module.exports = function pointageRoutes(db) {
     cols.push({ titre: 'Statut', valeur: 'statut' }, { titre: 'Saisi par', valeur: 'saisi_par_nom' }, { titre: 'Validé par', valeur: 'valide_par_nom' }, { titre: 'Observation', valeur: 'observation' });
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="pointages_${aujourdhuiDakar()}.csv"`);
-    res.send(csv(listePointages(req), cols));
+    res.send(csv(await listePointages(req), cols));
   });
 
   // Coûts de main-d'œuvre agrégés par chantier, métier, ouvrier, jour ou mois
-  r.get('/couts/main-oeuvre', requirePerm('cout.lire'), (req, res) => {
-    const groupes = { chantier: 'c.code || \' — \' || c.nom', metier: 'o.metier', ouvrier: 'o.matricule || \' — \' || o.nom || \' \' || COALESCE(o.prenom, \'\')', jour: 'p.date', mois: 'substr(p.date, 1, 7)' };
+  r.get('/couts/main-oeuvre', requirePerm('cout.lire'), async (req, res) => {
+    const groupes = { chantier: `c.code || ' — ' || c.nom`, metier: 'o.metier', ouvrier: `o.matricule || ' — ' || o.nom || ' ' || COALESCE(o.prenom, '')`, jour: `to_char(p.date, 'YYYY-MM-DD')`, mois: `to_char(p.date, 'YYYY-MM')` };
     const g = choix(req.query.groupe, 'Groupe', Object.keys(groupes), { defaut: 'chantier' });
-    const { where, params } = requetePointages(req);
+    const { where, params } = await requetePointages(req);
     const inclureNonValides = req.query.inclure_non_valides === '1';
-    const rows = db.prepare(`SELECT ${groupes[g]} AS groupe,
+    const rows = (await db.all(`SELECT ${groupes[g]} AS groupe,
         COUNT(DISTINCT p.ouvrier_id) AS ouvriers, COUNT(*) AS lignes,
         SUM(p.heures_normales) AS heures_normales, SUM(p.heures_sup) AS heures_sup,
         SUM(${COUT_SQL}) AS cout
       FROM pointages p JOIN chantiers c ON c.id = p.chantier_id JOIN ouvriers o ON o.id = p.ouvrier_id
       WHERE ${where} AND p.presence IN ('present','demi_journee') ${inclureNonValides ? "AND p.statut <> 'rejete'" : "AND p.statut = 'valide'"}
-      GROUP BY groupe ORDER BY ${g === 'jour' || g === 'mois' ? 'groupe' : 'cout DESC'}`).all(...params)
+      GROUP BY 1 ORDER BY ${g === 'jour' || g === 'mois' ? '1' : '6 DESC'}`, ...params))
       .map((x) => ({ ...x, cout: round(x.cout) }));
     res.json({ groupe: g, valides_uniquement: !inclureNonValides, lignes: rows, total: rows.reduce((s, x) => s + x.cout, 0) });
   });

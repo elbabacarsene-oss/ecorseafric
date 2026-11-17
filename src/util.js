@@ -6,33 +6,41 @@ class HttpError extends Error {
 }
 
 // Liste des chantiers accessibles (null = tous ceux de l'organisation)
-function chantiersAutorises(db, user) {
+async function chantiersAutorises(db, user) {
   if (!ROLES_RESTREINTS_CHANTIER.has(user.role)) return null;
-  return db.prepare('SELECT chantier_id FROM user_chantiers WHERE user_id = ?')
-    .all(user.id).map((r) => r.chantier_id);
+  return (await db.all('SELECT chantier_id FROM user_chantiers WHERE user_id = ?', user.id)).map((r) => r.chantier_id);
 }
 
 // Vérifie qu'un chantier existe dans l'organisation ET que l'utilisateur y a accès.
 // Renvoie 404 dans les deux cas pour ne pas révéler l'existence d'un chantier d'un autre client.
-function chargerChantier(db, user, id) {
-  const ch = db.prepare('SELECT * FROM chantiers WHERE id = ? AND org_id = ?').get(Number(id), user.org_id);
+async function chargerChantier(db, user, id) {
+  const n = Number(id);
+  if (!Number.isInteger(n) || n <= 0 || n > 2147483647) throw new HttpError(404, 'Chantier introuvable.');
+  const ch = await db.get('SELECT * FROM chantiers WHERE id = ? AND org_id = ?', n, user.org_id);
   if (!ch) throw new HttpError(404, 'Chantier introuvable.');
-  const ids = chantiersAutorises(db, user);
+  const ids = await chantiersAutorises(db, user);
   if (ids && !ids.includes(ch.id)) throw new HttpError(404, 'Chantier introuvable.');
   return ch;
 }
 
 // Fragment SQL de filtrage des chantiers accessibles
-function filtreChantiers(db, user, colonne = 'c.id') {
-  const ids = chantiersAutorises(db, user);
+async function filtreChantiers(db, user, colonne = 'c.id') {
+  const ids = await chantiersAutorises(db, user);
   if (ids === null) return { sql: '', params: [] };
-  if (ids.length === 0) return { sql: ' AND 0', params: [] };
+  if (ids.length === 0) return { sql: ' AND FALSE', params: [] };
   return { sql: ` AND ${colonne} IN (${ids.map(() => '?').join(',')})`, params: ids };
 }
 
 function audit(db, user, action, entite, entiteId, details) {
-  db.prepare('INSERT INTO audit_log (org_id, user_id, action, entite, entite_id, details) VALUES (?,?,?,?,?,?)')
-    .run(user.org_id, user.id, action, entite, entiteId ?? null, details ? JSON.stringify(details) : null);
+  return db.run('INSERT INTO audit_log (org_id, user_id, action, entite, entite_id, details) VALUES (?,?,?,?,?,?)',
+    user.org_id, user.id ?? null, action, entite, entiteId ?? null, details ? JSON.stringify(details) : null);
+}
+
+// Identifiant numérique issu d'une URL : tout ce qui n'est pas un entier positif valide donne 404
+function id(v, quoi = 'Ressource') {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n <= 0 || n > 2147483647) throw new HttpError(404, `${quoi} introuvable.`);
+  return n;
 }
 
 // ---------- Validation des entrées ----------
@@ -92,6 +100,6 @@ function csv(lignes, colonnes) {
 }
 
 module.exports = {
-  HttpError, chantiersAutorises, chargerChantier, filtreChantiers, audit,
+  HttpError, id, chantiersAutorises, chargerChantier, filtreChantiers, audit,
   texte, nombre, date, choix, aujourdhuiDakar, csv,
 };

@@ -30,6 +30,7 @@ async function api(method, url, body) {
   });
   if (res.status === 401 && !url.startsWith('/auth/')) { state.moi = null; location.hash = '#/connexion'; throw new Error('Session expirée, reconnectez-vous.'); }
   const data = (res.headers.get('content-type') || '').includes('json') ? await res.json() : null;
+  if (res.status === 403 && data && data.code === 'email_non_verifie') { state.moi = null; router(); }
   if (!res.ok) throw new Error((data && data.error) || `Erreur ${res.status}`);
   return data;
 }
@@ -104,6 +105,8 @@ const NAV = [
   { titre: 'Administration', perm: 'admin.journal' },
   { href: '#/admin', lib: 'Utilisateurs & paramètres', perm: 'admin.utilisateurs' },
   { href: '#/journal', lib: "Journal d'activité", perm: 'admin.journal' },
+  { titre: 'Compte' },
+  { href: '#/abonnement', lib: 'Abonnement' },
 ];
 
 function coquille(contenu) {
@@ -115,7 +118,7 @@ function coquille(contenu) {
     <aside class="sidebar" id="sidebar"><div class="brand"><img src="${logoEntreprise()}" alt="Logo ${esc(state.moi.organisation.nom)}"><div><b>${esc(state.moi.organisation.nom)}</b><small>${esc(state.config.nom_produit)}</small></div></div><ul class="nav">${nav}</ul></aside>
     <main class="main"><div class="topbar"><button class="btn secondaire petit menu-mobile" id="burger">☰ Menu</button><span></span>
       <div class="user"><span>${esc(u.nom)} · ${esc(LIB.role[u.role])}</span><button class="btn secondaire petit" id="mdp">Mot de passe</button><button class="btn secondaire petit" id="logout">Déconnexion</button></div></div>
-      <div id="page">${contenu}</div></main></div>`;
+      ${bandeauAcces()}<div id="page">${contenu}</div></main></div>`;
   $('#burger').onclick = () => $('#sidebar').classList.toggle('ouvert');
   $('#logout').onclick = async () => { await POST('/auth/deconnexion'); state.moi = null; location.hash = '#/connexion'; };
   $('#mdp').onclick = () => formulaire({
@@ -134,9 +137,11 @@ async function router() {
   const [chemin, query] = h.split('?');
   const params = Object.fromEntries(new URLSearchParams(query || ''));
   if (chemin === '/connexion' || chemin === '/inscription') return pageAuth(chemin === '/inscription');
+  if (PAGES_PUBLIQUES[chemin]) return PAGES_PUBLIQUES[chemin](params);
   if (!state.moi) {
     try { state.moi = await GET('/auth/moi'); } catch { location.hash = '#/connexion'; return; }
   }
+  if (!state.moi.utilisateur.email_verifie) return pageEmailNonConfirme();
   for (const [re, fn] of ROUTES) {
     const m = chemin.match(re);
     if (m) {
@@ -166,6 +171,7 @@ function pageAuth(inscription) {
       ${inscription ? '<span class="muted">10 caractères minimum, lettres et chiffres.</span>' : ''}
       <button class="btn vert" type="submit">${inscription ? "Créer l'espace entreprise" : 'Se connecter'}</button>
     </form>
+    ${inscription ? `<p class="muted">Essai gratuit de ${state.config.essai_heures || 24} h, sans moyen de paiement. Un e-mail de confirmation vous sera envoyé.</p>` : '<p class="muted"><a href="#/mot-de-passe-oublie">Mot de passe oublié ?</a></p>'}
     <p class="muted">${inscription ? '<a href="#/connexion">J\'ai déjà un compte</a>' : (state.config.inscription_ouverte ? 'Nouvelle entreprise ? <a href="#/inscription">Créer un espace gratuitement</a>' : '')}</p>
   </div></div>`;
   $('#f').onsubmit = async (e) => {
@@ -178,6 +184,134 @@ function pageAuth(inscription) {
     } catch (err) { $('.msg').innerHTML = `<div class="erreur">${esc(err.message)}</div>`; }
   };
 }
+
+// ============ Pages publiques : confirmation d'e-mail, mot de passe oublié ============
+function boiteAuth(contenu) {
+  $('#app').innerHTML = `<div class="auth"><div class="auth-box">
+    <div class="brand"><img src="/logo.svg" alt=""><div><b>${esc(state.config.nom_produit)}</b><small>Pointage & déboursés secs pour le BTP</small></div></div>
+    <div class="msg"></div>${contenu}</div></div>`;
+}
+const msgAuth = (html, ok = false) => { $('.msg').innerHTML = `<div class="${ok ? 'info' : 'erreur'}">${html}</div>`; };
+
+const PAGES_PUBLIQUES = {
+  '/mot-de-passe-oublie': () => {
+    boiteAuth(`<form id="f"><p class="muted">Indiquez votre adresse : vous recevrez un lien pour choisir un nouveau mot de passe.</p>
+      <label>Email<input name="email" type="email" required autocomplete="email"></label>
+      <button class="btn vert">Recevoir le lien</button></form><p class="muted"><a href="#/connexion">Retour à la connexion</a></p>`);
+    $('#f').onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        await POST('/auth/mot-de-passe-oublie', Object.fromEntries(new FormData(e.target)));
+        msgAuth('Si un compte existe pour cette adresse, un e-mail vient d\'être envoyé. Le lien est valable 1 heure. Pensez à regarder dans les courriers indésirables.', true);
+        e.target.remove();
+      } catch (err) { msgAuth(esc(err.message)); }
+    };
+  },
+  '/reinitialiser': (p) => {
+    boiteAuth(`<form id="f"><label>Nouveau mot de passe<input name="mot_de_passe" type="password" required autocomplete="new-password"></label>
+      <label>Confirmation<input name="confirmation" type="password" required autocomplete="new-password"></label>
+      <span class="muted">10 caractères minimum, lettres et chiffres.</span><button class="btn vert">Enregistrer</button></form>`);
+    $('#f').onsubmit = async (e) => {
+      e.preventDefault();
+      const v = Object.fromEntries(new FormData(e.target));
+      if (v.mot_de_passe !== v.confirmation) { msgAuth('Les deux mots de passe ne correspondent pas.'); return; }
+      try {
+        await POST('/auth/reinitialiser', { jeton: p.jeton, mot_de_passe: v.mot_de_passe });
+        state.moi = null;
+        msgAuth('Mot de passe modifié. <a href="#/connexion">Se connecter</a>', true);
+        e.target.remove();
+      } catch (err) { msgAuth(esc(err.message) + ' <a href="#/mot-de-passe-oublie">Nouvelle demande</a>'); }
+    };
+  },
+  '/confirmer': async (p) => {
+    boiteAuth('<p class="muted">Confirmation en cours…</p>');
+    try {
+      await POST('/auth/confirmer-email', { jeton: p.jeton });
+      state.moi = null;
+      boiteAuth(`<div class="info">Adresse confirmée. Votre essai gratuit de ${state.config.essai_heures || 24} h commence maintenant.</div>
+        <a class="btn vert" href="#/">Accéder à mon espace</a>`);
+    } catch (err) {
+      boiteAuth(`<div class="erreur">${esc(err.message)}</div><a class="btn secondaire" href="#/">Continuer</a>`);
+    }
+  },
+};
+
+function pageEmailNonConfirme() {
+  const u = state.moi.utilisateur;
+  boiteAuth(`<h3>Confirmez votre adresse e-mail</h3>
+    <p>Un e-mail a été envoyé à <b>${esc(u.email)}</b>. Cliquez sur le lien qu'il contient pour activer votre espace : votre essai gratuit de ${state.config.essai_heures || 24} h démarrera à ce moment-là.</p>
+    <p class="muted">Rien reçu ? Vérifiez les courriers indésirables, ou renvoyez l'e-mail.</p>
+    <div class="actions"><button class="btn vert" id="renvoyer">Renvoyer l'e-mail</button><button class="btn secondaire" id="deja">J'ai confirmé</button><button class="btn secondaire" id="sortir">Déconnexion</button></div>`);
+  $('#renvoyer').onclick = () => POST('/auth/renvoyer-confirmation').then(() => msgAuth('E-mail renvoyé.', true)).catch((e) => msgAuth(esc(e.message)));
+  $('#deja').onclick = () => { state.moi = null; router(); };
+  $('#sortir').onclick = async () => { await POST('/auth/deconnexion'); state.moi = null; location.hash = '#/connexion'; };
+}
+
+// ============ Abonnement ============
+const fmtDateHeure = (iso) => (iso ? new Intl.DateTimeFormat('fr-FR', { timeZone: 'Africa/Dakar', dateStyle: 'short', timeStyle: 'short' }).format(new Date(iso)) : '—');
+function bandeauAcces() {
+  const a = state.moi.acces;
+  const heures = a.fin ? (Date.parse(a.fin) - Date.now()) / 3600000 : 0;
+  if (a.statut === 'essai') return `<div class="bandeau">Essai gratuit : il reste <b>${heures >= 1 ? Math.floor(heures) + ' h' : Math.max(1, Math.round(heures * 60)) + ' min'}</b> (jusqu'au ${fmtDateHeure(a.fin)}). <a href="#/abonnement">S'abonner</a></div>`;
+  if (a.statut === 'expire' || a.statut === 'non_demarre') return `<div class="bandeau alerte">Votre ${a.statut === 'expire' ? 'période d\'essai ou abonnement est terminé' : 'essai n\'a pas démarré'} : l'espace est en <b>lecture seule</b>. <a href="#/abonnement">Renouveler l'abonnement</a></div>`;
+  if (a.statut === 'abonne' && heures < 24 * 7) return `<div class="bandeau attention">Votre abonnement se termine le ${fmtDateHeure(a.fin)}. <a href="#/abonnement">Le prolonger</a></div>`;
+  return '';
+}
+
+route(/^\/abonnement$/, async (p) => {
+  let verif = null;
+  if (p.paiement) {
+    // Retour de Wave : le serveur interroge Wave pour connaître le vrai statut du paiement
+    for (let i = 0; i < 5; i++) {
+      try { verif = await POST(`/abonnement/paiements/${Number(p.paiement)}/verifier`); } catch (e) { verif = { erreur: e.message }; break; }
+      if (verif.statut !== 'en_attente') break;
+      await new Promise((r) => setTimeout(r, 2500));
+    }
+    state.moi = await GET('/auth/moi');
+    coquille('<div class="vide">Chargement…</div>');
+  }
+  const ab = await GET('/abonnement');
+  const a = ab.acces;
+  const libStatut = { essai: ['Essai gratuit', 'bleu'], abonne: ['Abonnement actif', 'vert'], expire: ['Expiré — lecture seule', 'rouge'], non_demarre: ['Essai non démarré', 'orange'] }[a.statut];
+  let html = '<h1>Abonnement</h1>';
+  if (verif) {
+    html += verif.erreur ? `<div class="erreur">${esc(verif.erreur)}</div>`
+      : verif.statut === 'paye' ? '<div class="info">Paiement reçu. Merci ! Votre abonnement est actif.</div>'
+      : verif.statut === 'echoue' ? '<div class="erreur">Le paiement a été annulé ou a expiré. Aucun montant n\'a été débité. Vous pouvez réessayer.</div>'
+      : `<div class="info">Paiement en cours de confirmation par Wave. <button class="btn petit" id="reverifier">Vérifier à nouveau</button></div>`;
+  }
+  html += `<div class="panneau"><dl class="fiche"><dt>Statut</dt><dd><span class="badge ${libStatut[1]}">${libStatut[0]}</span></dd>
+    ${a.fin ? `<dt>${a.statut === 'expire' ? 'Terminé le' : 'Jusqu\'au'}</dt><dd>${fmtDateHeure(a.fin)} (heure de Dakar)</dd>` : ''}
+    ${ab.prix_mensuel ? `<dt>Tarif</dt><dd>${fmtXOF(ab.prix_mensuel)} par mois</dd>` : ''}</dl>
+    <p class="muted">Sans abonnement actif, vos données restent consultables mais la saisie (pointage, études, chantiers…) est bloquée. Un paiement prolonge l'abonnement à partir de sa date de fin actuelle : rien n'est perdu en payant en avance.</p></div>`;
+  if (!ab.paiement_disponible) {
+    html += '<div class="info">Le paiement en ligne n\'est pas encore activé sur ce service. Contactez le support pour vous abonner.</div>';
+  } else if (!ab.peut_payer) {
+    html += '<div class="info">Seul un administrateur de votre entreprise peut régler l\'abonnement.</div>';
+  } else {
+    html += `<h2>Payer avec Wave</h2><div class="cartes">${ab.durees.map((m) => `<div class="carte vert"><div class="lib">${m} mois</div>
+      <div class="val">${fmtXOF(ab.prix_mensuel * m)}</div><p><button class="btn vert" data-mois="${m}">Payer avec Wave</button></p></div>`).join('')}</div>
+      <p class="muted">Vous serez redirigé vers la page de paiement sécurisée de Wave (application Wave ou QR code), puis ramené ici.</p>`;
+  }
+  if (ab.paiements.length) {
+    const lib = { paye: ['Payé', 'vert'], en_attente: ['En attente', 'orange'], echoue: ['Annulé / échoué', 'rouge'] };
+    html += `<h2>Historique des paiements</h2><div class="table-wrap"><table><thead><tr><th>Date</th><th>Durée</th><th class="num">Montant</th><th>Statut</th><th>Période couverte</th><th></th></tr></thead><tbody>
+      ${ab.paiements.map((x) => `<tr><td>${fmtDateHeure(x.created_at)}</td><td>${x.mois} mois</td><td class="num">${fmtXOF(x.montant)}</td>
+        <td><span class="badge ${lib[x.statut][1]}">${lib[x.statut][0]}</span></td>
+        <td>${x.periode_debut ? `${fmtDate(x.periode_debut)} → ${fmtDate(x.periode_fin)}` : '—'}</td>
+        <td>${x.statut === 'en_attente' ? `<button class="btn secondaire petit" data-verif="${x.id}">Vérifier</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+  page(html);
+  $$('[data-mois]').forEach((b) => {
+    b.onclick = async () => {
+      b.disabled = true;
+      try { const r = await POST('/abonnement/paiements', { mois: Number(b.dataset.mois) }); location.href = r.wave_launch_url; }
+      catch (e) { toast(e.message, true); b.disabled = false; }
+    };
+  });
+  $$('[data-verif]').forEach((b) => { b.onclick = () => { location.hash = `#/abonnement?paiement=${b.dataset.verif}&t=${Date.now()}`; }; });
+  if ($('#reverifier')) $('#reverifier').onclick = () => { location.hash = `#/abonnement?paiement=${Number(p.paiement)}&t=${Date.now()}`; };
+});
 
 // ============ Tableau de bord ============
 function barre(pct) {
@@ -788,4 +922,5 @@ route(/^\/journal$/, async () => {
     </tbody></table></div>` : '<div class="panneau vide">Aucune opération.</div>'}`);
 });
 
+setInterval(() => { if (state.moi) GET('/auth/moi').then((m) => { state.moi = m; }).catch(() => {}); }, 5 * 60 * 1000);
 GET('/config').then((c) => { state.config = c; document.title = c.nom_produit; }).catch(() => {}).finally(router);

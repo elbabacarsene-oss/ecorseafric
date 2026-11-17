@@ -1,7 +1,8 @@
 # Architecture
 
 - **Serveur** : Node.js + Express 5 (`src/`). API JSON sous `/api`.
-- **Base** : SQLite relationnelle (`src/db.js`), clés étrangères et contraintes CHECK actives. Chaque table métier porte `org_id` : chaque entreprise cliente du SaaS est isolée, le filtre est appliqué dans toutes les requêtes serveur.
+- **Base** : PostgreSQL (`src/db.js`, pilote `pg`), clés étrangères et contraintes CHECK. Le schéma est créé/complété au démarrage (sous verrou consultatif, sûr avec plusieurs instances). Chaque table métier porte `org_id` : chaque entreprise cliente du SaaS est isolée, le filtre est appliqué dans toutes les requêtes serveur. Les écritures multiples passent par des transactions ; les saisies concurrentes de pointage sont sérialisées par verrou de ligne.
+- **E-mails** : API Brevo (`src/email.js`). **Paiement** : Wave Checkout (`src/wave.js`, `src/routes/abonnement.js`).
 - **Interface** : SPA en JavaScript sans framework (`public/`), responsive (bureau, tablette, smartphone).
 - **Calculs** : fonctions pures dans `src/calc.js`, testées unitairement.
 
@@ -12,6 +13,8 @@
 - CSRF : cookie SameSite=Strict + toute écriture doit être en `application/json`.
 - En-têtes : CSP stricte (aucun script en ligne), `X-Frame-Options: DENY`, `nosniff`.
 - Contrôle d'accès **côté serveur** pour chaque route (rôle + chantier). Un chantier non autorisé renvoie 404, ce qui empêche de deviner les identifiants.
+- Confirmation de l'adresse e-mail obligatoire ; jetons d'e-mail aléatoires 256 bits, stockés hachés, à usage unique (48 h pour la confirmation, 1 h pour la réinitialisation). « Mot de passe oublié » répond de la même façon que l'adresse existe ou non.
+- Limites : 5 créations d'espace par heure et par IP ; 3 demandes de réinitialisation par heure et par adresse.
 - Journal des opérations sensibles (`audit_log`) : connexions, créations, modifications de taux, validations, rejets, déverrouillages.
 
 ## Matrice des permissions
@@ -34,6 +37,13 @@
 
 **Séparation des tâches** : on ne valide ni son propre pointage ni sa propre étude (sauf l'administrateur). Un pointage validé est verrouillé ; une étude validée n'est plus modifiable sans repasser en brouillon.
 
+## Essai et abonnement
+- L'essai (24 h, `ESSAI_HEURES`) démarre à la confirmation de l'e-mail de l'administrateur fondateur.
+- État d'accès : `essai`, `abonne`, `expire`, `non_demarre`. Hors `essai`/`abonne`, toute écriture renvoie **402** (sauf authentification et abonnement) ; la lecture reste possible.
+- Paiement : l'administrateur choisit 1, 3, 6 ou 12 mois → session Wave Checkout (montant = tarif mensuel × mois, en XOF) → redirection vers Wave → retour sur `/paiement/retour`.
+- **Un paiement n'est crédité qu'après lecture de la session directement auprès de l'API Wave** (statut `complete` + `succeeded`, devise XOF, montant identique). La redirection de retour et le webhook ne font que déclencher cette vérification. Le webhook est en plus authentifié par signature HMAC (`Wave-Signature`, tolérance 5 min).
+- Le crédit est idempotent (verrou sur la ligne de paiement) : une notification rejouée ne prolonge pas deux fois. La prolongation part de la plus tardive des dates : maintenant, fin d'abonnement en cours, fin d'essai.
+
 ## Formules
 
 **Coût d'une ligne de pointage**
@@ -49,11 +59,12 @@ Seules les présences « présent » et « ½ journée » génèrent des heures.
 Les lignes conservent une copie du DS : modifier un prix de la bibliothèque n'altère pas une étude tant qu'on ne clique pas « Actualiser les prix ».
 
 ## Modèle de données
-`organisations` → `users` (+ `user_chantiers`), `chantiers`, `ouvriers` (+ `affectations`), `pointages`, `ressources`, `ouvrages` (+ `ouvrage_composants`), `etudes` (+ `etude_lignes`), `audit_log`. Voir `src/db.js`.
+`organisations` (essai, abonnement, logo) → `users` (+ `user_chantiers`, `sessions`, `jetons`), `paiements`, `chantiers`, `ouvriers` (+ `affectations`), `pointages`, `ressources`, `ouvrages` (+ `ouvrage_composants`), `etudes` (+ `etude_lignes`), `audit_log`. Voir `src/db.js`.
 
 ## Limites de cette version
 - Pas de mode hors ligne (prévu à l'étape 6 du cahier des charges : PWA avec file de synchronisation).
 - PDF via l'impression du navigateur ; export Excel en CSV (séparateur « ; »).
 - La majoration des heures sup. est un taux unique paramétrable : les paliers légaux (heures de nuit, jours fériés…) et la paie réglementaire ne sont pas calculés.
-- SQLite convient pour une instance par entreprise ou un trafic modéré. Pour un SaaS à grande échelle, migrer vers PostgreSQL (le SQL est standard).
-- Pas encore d'envoi d'e-mails (réinitialisation de mot de passe : c'est l'administrateur qui en définit un nouveau).
+- Les limites anti-abus (tentatives de connexion, inscriptions) sont gardées en mémoire : elles valent par instance. Avec plusieurs instances, les stocker dans PostgreSQL ou Redis.
+- Pas de facture PDF pour l'abonnement (le reçu Wave fait foi).
+- Une adresse e-mail ne peut appartenir qu'à un seul espace.
