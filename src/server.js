@@ -11,13 +11,13 @@ const { abonnementRoutes, webhookWave } = require('./routes/abonnement');
 
 async function createApp(options = {}) {
   const cfg = lireConfig(options);
-  const db = await openDb(cfg.databaseUrl, { reinitialiser: !!options.reinitialiserBase });
+  const db = await openDb(cfg.databaseUrl, { reinitialiser: !!options.reinitialiserBase, ssl: cfg.databaseSsl });
   const emetteur = creerEmetteur(cfg.email);
   const wave = creerClientWave(cfg.wave);
   const app = express();
   app.disable('x-powered-by');
-  // Derrière un proxy (hébergeur, Nginx) : nombre de proxys de confiance pour l'adresse IP réelle
-  app.set('trust proxy', Number(process.env.TRUST_PROXY || 1));
+  // Derrière un proxy (hébergeur, Caddy/Nginx) : nombre de proxys ou plages d'adresses de confiance
+  app.set('trust proxy', /^\d+$/.test(cfg.trustProxy) ? Number(cfg.trustProxy) : cfg.trustProxy);
 
   // En-têtes de sécurité
   app.use((_req, res, next) => {
@@ -104,7 +104,9 @@ async function createApp(options = {}) {
 if (require.main === module) {
   const port = Number(process.env.PORT) || 3000;
   createApp().then(({ app, db, cfg }) => {
-    if (!cfg.prixMensuel || !cfg.wave.apiKey) console.warn('[abonnement] ABONNEMENT_PRIX_MENSUEL_XOF ou WAVE_API_KEY absent : le paiement en ligne est désactivé.');
+    if (!cfg.wave.apiKey) console.warn('[abonnement] WAVE_API_KEY absent : le paiement en ligne est désactivé.');
+    if (cfg.wave.apiKey && !cfg.wave.webhookSecret) console.warn('[abonnement] WAVE_WEBHOOK_SECRET absent : les notifications Wave seront refusées (les paiements restent vérifiés au retour du client).');
+    if (cfg.appUrl.startsWith('http://localhost')) console.warn('[config] APP_URL pointe sur localhost : les liens des e-mails et le retour de Wave ne fonctionneront pas en production.');
     const server = app.listen(port, () => console.log(`${cfg.nomProduit} — serveur démarré sur le port ${port}`));
     const arret = () => server.close(() => db.close().then(() => process.exit(0)));
     process.on('SIGTERM', arret);

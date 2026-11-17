@@ -253,8 +253,15 @@ class Base extends Db {
   async close() { await this.pool.end(); }
 }
 
-async function openDb(connectionString, { reinitialiser = false } = {}) {
-  const pool = new Pool({ connectionString, max: Number(process.env.PG_POOL_MAX) || 10 });
+const optionSsl = (mode) => {
+  if (!mode) return undefined;
+  if (mode === 'require') return { rejectUnauthorized: true };
+  if (mode === 'no-verify') return { rejectUnauthorized: false };
+  throw new Error(`DATABASE_SSL invalide : « ${mode} » (valeurs : require, no-verify)`);
+};
+
+async function openDb(connectionString, { reinitialiser = false, ssl = '' } = {}) {
+  const pool = new Pool({ connectionString, ssl: optionSsl(ssl), max: Number(process.env.PG_POOL_MAX) || 10, connectionTimeoutMillis: 10000 });
   const db = new Base(pool);
   if (reinitialiser) await pool.query('DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;');
   // Verrou consultatif : plusieurs instances qui démarrent ensemble n'appliquent pas le schéma en même temps

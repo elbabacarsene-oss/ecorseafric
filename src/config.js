@@ -4,13 +4,20 @@
 function lireConfig(surcharges = {}) {
   const e = process.env;
   const c = {
-    databaseUrl: e.DATABASE_URL || 'postgres://btp:btp@localhost:5432/btp',
+    // Render et Railway fournissent DATABASE_URL ; Scalingo fournit SCALINGO_POSTGRESQL_URL
+    databaseUrl: e.DATABASE_URL || e.SCALINGO_POSTGRESQL_URL || 'postgres://btp:btp@localhost:5432/btp',
+    // Connexion chiffrée à la base : vide (non chiffrée, réseau privé de l'hébergeur), « require » (certificat vérifié)
+    // ou « no-verify » (chiffrée, certificat auto-signé de certains hébergeurs)
+    databaseSsl: e.DATABASE_SSL || '',
+    // Proxys de confiance devant l'application. Par défaut : uniquement les adresses privées,
+    // ce qui donne la vraie IP du visiteur chez les hébergeurs sans permettre de la falsifier.
+    trustProxy: e.TRUST_PROXY || 'loopback, linklocal, uniquelocal',
     appUrl: (e.APP_URL || 'http://localhost:3000').replace(/\/$/, ''),
     secureCookies: e.COOKIE_SECURE === '1',
     inscriptionOuverte: e.INSCRIPTION_OUVERTE !== '0',
     nomProduit: e.NOM_PRODUIT || 'BTP Manager 360',
     essaiHeures: Number(e.ESSAI_HEURES || 24),
-    prixMensuel: e.ABONNEMENT_PRIX_MENSUEL_XOF ? Number(e.ABONNEMENT_PRIX_MENSUEL_XOF) : null,
+    prixMensuel: Number(e.ABONNEMENT_PRIX_MENSUEL_XOF || 15000),
     email: {
       brevoApiKey: e.BREVO_API_KEY || null,
       brevoApiUrl: e.BREVO_API_URL || 'https://api.brevo.com/v3/smtp/email',

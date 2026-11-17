@@ -34,7 +34,9 @@ DATABASE_URL_TEST=postgres://utilisateur:mdp@localhost:5432/btp_test npm test
 Toutes les variables de configuration sont décrites dans [.env.example](.env.example).
 
 ## Mise en production
-Docker + PostgreSQL : voir [docs/DEPLOIEMENT.md](docs/DEPLOIEMENT.md).
+Déploiement sur **Render** en quelques clics grâce à `render.yaml` (application + PostgreSQL gérée, région Francfort). Railway, Scalingo et serveur Docker sont aussi pris en charge : voir [docs/DEPLOIEMENT.md](docs/DEPLOIEMENT.md).
+
+Tarif configuré : **15 000 F CFA par mois** (1, 3, 6 ou 12 mois), essai gratuit de 24 h.
 
 **Logos** : chaque entreprise importe le sien (PNG, JPEG ou WebP, 300 Ko max.) dans « Utilisateurs & paramètres ». `public/logo.svg` est le logo du produit, affiché sur la page de connexion.
 
