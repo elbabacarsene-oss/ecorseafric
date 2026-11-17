@@ -196,7 +196,16 @@ function openDb(file) {
   const db = new DatabaseSync(file);
   if (file !== ':memory:') db.exec('PRAGMA journal_mode = WAL;');
   db.exec(SCHEMA);
+  migrer(db);
   return db;
+}
+
+// Migrations incrémentales pour les bases déjà créées
+function migrer(db) {
+  const cols = db.prepare('PRAGMA table_info(organisations)').all().map((c) => c.name);
+  if (!cols.includes('logo')) db.exec('ALTER TABLE organisations ADD COLUMN logo BLOB');
+  if (!cols.includes('logo_type')) db.exec('ALTER TABLE organisations ADD COLUMN logo_type TEXT');
+  if (!cols.includes('logo_version')) db.exec('ALTER TABLE organisations ADD COLUMN logo_version INTEGER NOT NULL DEFAULT 0');
 }
 
 // Exécute fn dans une transaction (annulée en cas d'erreur).

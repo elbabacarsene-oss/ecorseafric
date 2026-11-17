@@ -11,6 +11,7 @@ module.exports = function authRoutes(db, { secureCookies, inscriptionOuverte }) 
   // Création d'un espace entreprise + premier administrateur
   r.post('/auth/inscription', (req, res) => {
     if (!inscriptionOuverte) throw new HttpError(403, 'Les inscriptions sont fermées sur cette instance.');
+    if (A.limiterConnexion(`inscription|${req.ip}`, 5, 60 * 60 * 1000)) throw new HttpError(429, 'Trop de créations d\'espace depuis cette adresse. Réessayez dans une heure.');
     const entreprise = texte(req.body.entreprise, 'Entreprise', { requis: true, max: 120 });
     const nom = texte(req.body.nom, 'Nom', { requis: true, max: 120 });
     const email = texte(req.body.email, 'Email', { requis: true, max: 160 });
@@ -53,7 +54,8 @@ module.exports = function authRoutes(db, { secureCookies, inscriptionOuverte }) 
   });
 
   r.get('/auth/moi', A.requireAuth, (req, res) => {
-    const org = db.prepare('SELECT * FROM organisations WHERE id = ?').get(req.user.org_id);
+    const org = db.prepare(`SELECT id, nom, devise, fuseau, majoration_hs_pct, heures_jour_standard, tva_pct, created_at,
+      logo_version, logo IS NOT NULL AS a_logo FROM organisations WHERE id = ?`).get(req.user.org_id);
     const permissions = Object.keys(A.PERMISSIONS).filter((p) => A.can(req.user, p));
     res.json({ utilisateur: { id: req.user.id, nom: req.user.nom, email: req.user.email, role: req.user.role }, organisation: org, permissions });
   });
@@ -139,6 +141,44 @@ module.exports = function authRoutes(db, { secureCookies, inscriptionOuverte }) 
       .run(v.nom, v.majoration_hs_pct, v.heures_jour_standard, v.tva_pct, o.id);
     audit(db, req.user, 'modification', 'organisation', o.id, v);
     res.json({ ok: true });
+  });
+
+  // ---------- Logo de l'entreprise ----------
+  // PNG, JPEG ou WebP uniquement (pas de SVG, qui peut contenir du script), 300 Ko maximum.
+  // Le type est déterminé par la signature du fichier, pas par ce que déclare le navigateur.
+  const LOGO_MAX = 300 * 1024;
+  const typeImage = (buf) => {
+    if (buf.length > 8 && buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
+    if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+    if (buf.length > 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
+    return null;
+  };
+
+  r.put('/organisation/logo', A.requirePerm('admin.parametres'), (req, res) => {
+    const m = /^data:[\w/+.-]+;base64,([A-Za-z0-9+/=]+)$/.exec(String(req.body.image || ''));
+    if (!m) throw new HttpError(400, 'Image invalide.');
+    const buf = Buffer.from(m[1], 'base64');
+    if (buf.length > LOGO_MAX) throw new HttpError(400, 'Le logo ne doit pas dépasser 300 Ko.');
+    const type = typeImage(buf);
+    if (!type) throw new HttpError(400, 'Format accepté : PNG, JPEG ou WebP.');
+    db.prepare('UPDATE organisations SET logo = ?, logo_type = ?, logo_version = logo_version + 1 WHERE id = ?').run(buf, type, req.user.org_id);
+    audit(db, req.user, 'modification_logo', 'organisation', req.user.org_id, { type, octets: buf.length });
+    res.json({ ok: true });
+  });
+
+  r.delete('/organisation/logo', A.requirePerm('admin.parametres'), (req, res) => {
+    db.prepare('UPDATE organisations SET logo = NULL, logo_type = NULL, logo_version = logo_version + 1 WHERE id = ?').run(req.user.org_id);
+    audit(db, req.user, 'suppression_logo', 'organisation', req.user.org_id);
+    res.json({ ok: true });
+  });
+
+  // Chaque utilisateur ne reçoit que le logo de sa propre entreprise
+  r.get('/organisation/logo', A.requireAuth, (req, res) => {
+    const o = db.prepare('SELECT logo, logo_type FROM organisations WHERE id = ?').get(req.user.org_id);
+    if (!o.logo) throw new HttpError(404, 'Aucun logo.');
+    res.setHeader('Content-Type', o.logo_type);
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    res.send(Buffer.from(o.logo));
   });
 
   r.get('/journal', A.requirePerm('admin.journal'), (req, res) => {

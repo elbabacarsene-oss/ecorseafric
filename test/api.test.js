@@ -25,7 +25,7 @@ function client() {
     const ct = res.headers.get('content-type') || '';
     return { status: res.status, body: ct.includes('json') ? await res.json() : await res.text() };
   };
-  return { get: (u) => call('GET', u), post: (u, b = {}) => call('POST', u, b), put: (u, b) => call('PUT', u, b), patch: (u, b) => call('PATCH', u, b), del: (u) => call('DELETE', u) };
+  return { get: (u) => call('GET', u), post: (u, b = {}) => call('POST', u, b), put: (u, b) => call('PUT', u, b), patch: (u, b) => call('PATCH', u, b), del: (u) => call('DELETE', u, {}) };
 }
 
 const MDP = 'MotDePasse2026';
@@ -231,4 +231,44 @@ test('déconnexion et CSRF', async () => {
   assert.equal(r.status, 415);
   await admin.post('/auth/deconnexion');
   assert.equal((await admin.get('/auth/moi')).status, 401);
+});
+
+test('logo par entreprise : formats contrôlés et isolation', async () => {
+  const admin = client();
+  await admin.post('/auth/connexion', { email: 'admin@ea.sn', mot_de_passe: MDP });
+  // PNG 1×1 valide
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  assert.equal((await admin.get('/organisation/logo')).status, 404);
+  assert.equal((await admin.put('/organisation/logo', { image: 'data:image/png;base64,' + png })).status, 200);
+  let r = await admin.get('/auth/moi');
+  assert.equal(r.body.organisation.a_logo, 1);
+  assert.equal(r.body.organisation.logo, undefined, 'le binaire ne transite pas dans /auth/moi');
+  r = await fetch(base + '/organisation/logo', { headers: { Cookie: (await (async () => { const res = await fetch(base + '/auth/connexion', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin@ea.sn', mot_de_passe: MDP }) }); return res.headers.get('set-cookie').split(';')[0]; })()) } });
+  assert.equal(r.headers.get('content-type'), 'image/png');
+
+  // SVG (peut contenir du script) et faux PNG refusés, quel que soit le type déclaré
+  const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>').toString('base64');
+  assert.equal((await admin.put('/organisation/logo', { image: 'data:image/png;base64,' + svg })).status, 400);
+  assert.equal((await admin.put('/organisation/logo', { image: 'data:image/png;base64,' + Buffer.alloc(400 * 1024).toString('base64') })).status, 400);
+  // Seul l'administrateur modifie le logo
+  assert.equal((await ctx.direction.put('/organisation/logo', { image: 'data:image/png;base64,' + png })).status, 403);
+  // Une autre entreprise ne reçoit pas ce logo
+  const autre = client();
+  await autre.post('/auth/connexion', { email: 'b@autre.sn', mot_de_passe: MDP });
+  assert.equal((await autre.get('/organisation/logo')).status, 404);
+  assert.equal((await admin.del('/organisation/logo')).status, 200);
+  assert.equal((await admin.get('/organisation/logo')).status, 404);
+});
+
+test('configuration publique et limitation des créations d\'espace', async () => {
+  const anonyme = client();
+  const c = await anonyme.get('/config');
+  assert.equal(c.body.inscription_ouverte, true);
+  assert.ok(c.body.nom_produit);
+  // 3 tentatives déjà faites depuis cette adresse (dont une refusée) : 2 passent, puis blocage
+  const statuts = [];
+  for (let i = 0; i < 4; i++) {
+    statuts.push((await client().post('/auth/inscription', { entreprise: `E${i}`, nom: 'N', email: `spam${i}@x.sn`, mot_de_passe: MDP })).status);
+  }
+  assert.deepEqual(statuts, [201, 201, 429, 429]);
 });

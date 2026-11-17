@@ -5,7 +5,7 @@ const { openDb } = require('./db');
 const { sessionMiddleware } = require('./auth');
 const { HttpError } = require('./util');
 
-function createApp({ dbFile = path.join(__dirname, '..', 'data', 'btp.db'), secureCookies = false, inscriptionOuverte = true } = {}) {
+function createApp({ dbFile = path.join(__dirname, '..', 'data', 'btp.db'), secureCookies = false, inscriptionOuverte = true, nomProduit = 'BTP Manager 360' } = {}) {
   const db = openDb(dbFile);
   const app = express();
   app.disable('x-powered-by');
@@ -31,6 +31,8 @@ function createApp({ dbFile = path.join(__dirname, '..', 'data', 'btp.db'), secu
   app.use('/api', sessionMiddleware(db));
   app.use('/api', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
 
+  // Configuration publique (affichée avant connexion)
+  app.get('/api/config', (_req, res) => res.json({ nom_produit: nomProduit, inscription_ouverte: inscriptionOuverte }));
   app.use('/api', require('./routes/auth')(db, { secureCookies, inscriptionOuverte }));
   app.use('/api', require('./routes/dashboard')(db));
   app.use('/api', require('./routes/chantiers')(db));
@@ -60,8 +62,9 @@ if (require.main === module) {
     dbFile: process.env.DB_FILE || undefined,
     secureCookies: process.env.COOKIE_SECURE === '1',
     inscriptionOuverte: process.env.INSCRIPTION_OUVERTE !== '0',
+    nomProduit: process.env.NOM_PRODUIT || undefined,
   });
-  app.listen(port, () => console.log(`ECORSE AFRIC BTP — serveur démarré sur http://localhost:${port}`));
+  app.listen(port, () => console.log(`BTP Manager 360 — serveur démarré sur http://localhost:${port}`));
 }
 
 module.exports = { createApp };

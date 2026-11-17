@@ -18,7 +18,7 @@ npm start            # http://localhost:3000
 npm test             # tests automatisés (formules, droits, isolation)
 ```
 
-À la première visite, cliquez « Créer un espace entreprise » : vous devenez administrateur.
+**SaaS ouvert** : n'importe quelle entreprise crée son propre espace depuis la page de connexion (« Créer un espace gratuitement ») et en devient l'administrateur. Chaque espace est totalement isolé des autres (chantiers, personnel, prix, études, logo). Les créations d'espace sont limitées à 5 par heure et par adresse IP.
 
 | Variable | Défaut | Rôle |
 |---|---|---|
@@ -26,9 +26,10 @@ npm test             # tests automatisés (formules, droits, isolation)
 | `DB_FILE` | `data/btp.db` | Fichier de base de données |
 | `COOKIE_SECURE` | 0 | Mettre `1` derrière HTTPS (obligatoire en production) |
 | `INSCRIPTION_OUVERTE` | 1 | Mettre `0` pour interdire la création de nouveaux espaces |
+| `NOM_PRODUIT` | BTP Manager 360 | Nom affiché sur la page de connexion et dans l'onglet |
 
 **Sauvegarde** : copier le fichier `data/btp.db` (par ex. `sqlite3 data/btp.db ".backup sauvegarde.db"` via une tâche planifiée).
 
-**Logo** : remplacer `public/logo.svg` par le logo officiel.
+**Logos** : chaque entreprise importe le sien (PNG, JPEG ou WebP, 300 Ko max.) dans « Utilisateurs & paramètres ». `public/logo.svg` est le logo du produit, affiché sur la page de connexion.
 
 Détails techniques, modèle de données, matrice des permissions et formules : [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

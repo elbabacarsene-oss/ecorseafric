@@ -112,14 +112,15 @@ function requirePerm(perm) {
   };
 }
 
-// Limitation simple des tentatives de connexion (mémoire) : 10 essais / 15 min par IP+email
+// Limitation simple en mémoire : renvoie true si plus de `max` essais dans la fenêtre.
+// Connexion : 10 essais / 15 min par IP+email. Inscription : 5 espaces / heure par IP.
 const tentatives = new Map();
-function limiterConnexion(cle) {
+function limiterConnexion(cle, max = 10, fenetreMs = 15 * 60 * 1000) {
   const now = Date.now();
-  const t = (tentatives.get(cle) || []).filter((x) => now - x < 15 * 60 * 1000);
+  const t = (tentatives.get(cle) || []).filter((x) => now - x < fenetreMs);
   t.push(now);
   tentatives.set(cle, t);
-  return t.length > 10;
+  return t.length > max;
 }
 function reinitialiserTentatives(cle) { tentatives.delete(cle); }
 

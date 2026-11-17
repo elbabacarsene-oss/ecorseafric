@@ -1,5 +1,5 @@
 'use strict';
-/* ECORSE AFRIC BTP Manager — interface web (SPA sans dépendance). */
+/* BTP Manager 360 — interface web (SPA sans dépendance). */
 
 // ============ Utilitaires ============
 const $ = (s, el = document) => el.querySelector(s);
@@ -21,6 +21,8 @@ const LIB = {
 const badge = (map, k) => { const v = LIB[map][k] || [k, '']; return `<span class="badge ${v[1]}">${esc(v[0])}</span>`; };
 
 async function api(method, url, body) {
+  // Toute requête d'écriture part en JSON (exigé par la protection CSRF du serveur), même sans données
+  if (method !== 'GET' && body === undefined) body = {};
   const res = await fetch('/api' + url, {
     method, credentials: 'same-origin',
     headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
@@ -41,7 +43,8 @@ function toast(msg, err = false) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.className = ''; }, 3500);
 }
 
-const state = { moi: null };
+const state = { moi: null, config: { nom_produit: 'BTP Manager 360', inscription_ouverte: true } };
+const logoEntreprise = () => (state.moi && state.moi.organisation.a_logo ? `/api/organisation/logo?v=${state.moi.organisation.logo_version}` : '/logo.svg');
 const peut = (p) => !!state.moi && state.moi.permissions.includes(p);
 const qs = (o) => { const p = new URLSearchParams(); for (const [k, v] of Object.entries(o)) if (v !== '' && v !== null && v !== undefined) p.set(k, v); const s = p.toString(); return s ? '?' + s : ''; };
 
@@ -109,7 +112,7 @@ function coquille(contenu) {
   const nav = NAV.filter((n) => !n.perm || peut(n.perm)).map((n) => (n.titre ? `<li class="titre">${esc(n.titre)}</li>` : `<li><a href="${n.href}" class="${actif(n.href) ? 'actif' : ''}">${esc(n.lib)}</a></li>`)).join('');
   const u = state.moi.utilisateur;
   $('#app').innerHTML = `<div class="layout">
-    <aside class="sidebar" id="sidebar"><div class="brand"><img src="/logo.svg" alt="Logo"><div><b>${esc(state.moi.organisation.nom)}</b><small>BTP Manager 360</small></div></div><ul class="nav">${nav}</ul></aside>
+    <aside class="sidebar" id="sidebar"><div class="brand"><img src="${logoEntreprise()}" alt="Logo ${esc(state.moi.organisation.nom)}"><div><b>${esc(state.moi.organisation.nom)}</b><small>${esc(state.config.nom_produit)}</small></div></div><ul class="nav">${nav}</ul></aside>
     <main class="main"><div class="topbar"><button class="btn secondaire petit menu-mobile" id="burger">☰ Menu</button><span></span>
       <div class="user"><span>${esc(u.nom)} · ${esc(LIB.role[u.role])}</span><button class="btn secondaire petit" id="mdp">Mot de passe</button><button class="btn secondaire petit" id="logout">Déconnexion</button></div></div>
       <div id="page">${contenu}</div></main></div>`;
@@ -153,7 +156,7 @@ const page = (html) => { $('#page').innerHTML = html; };
 // ============ Authentification ============
 function pageAuth(inscription) {
   $('#app').innerHTML = `<div class="auth"><div class="auth-box">
-    <div class="brand"><img src="/logo.svg" alt="Logo"><div><b>ECORSE AFRIC</b><small>BTP Manager 360 — Pointage & déboursés secs</small></div></div>
+    <div class="brand"><img src="/logo.svg" alt=""><div><b>${esc(state.config.nom_produit)}</b><small>Pointage & déboursés secs pour le BTP</small></div></div>
     <div class="msg"></div>
     <form id="f">${inscription ? `
       <label>Entreprise<input name="entreprise" required></label>
@@ -163,7 +166,7 @@ function pageAuth(inscription) {
       ${inscription ? '<span class="muted">10 caractères minimum, lettres et chiffres.</span>' : ''}
       <button class="btn vert" type="submit">${inscription ? "Créer l'espace entreprise" : 'Se connecter'}</button>
     </form>
-    <p class="muted">${inscription ? '<a href="#/connexion">J\'ai déjà un compte</a>' : '<a href="#/inscription">Créer un espace entreprise</a>'}</p>
+    <p class="muted">${inscription ? '<a href="#/connexion">J\'ai déjà un compte</a>' : (state.config.inscription_ouverte ? 'Nouvelle entreprise ? <a href="#/inscription">Créer un espace gratuitement</a>' : '')}</p>
   </div></div>`;
   $('#f').onsubmit = async (e) => {
     e.preventDefault();
@@ -725,6 +728,10 @@ route(/^\/admin$/, async () => {
     <div class="panneau"><dl class="fiche"><dt>Raison sociale</dt><dd>${esc(org.nom)}</dd><dt>Devise</dt><dd>${esc(org.devise)} (franc CFA)</dd><dt>Fuseau horaire</dt><dd>${esc(org.fuseau)}</dd>
       <dt>Journée standard</dt><dd>${fmtNum(org.heures_jour_standard)} h</dd><dt>Majoration heures sup.</dt><dd>${fmtNum(org.majoration_hs_pct)} %</dd><dt>TVA par défaut</dt><dd>${fmtNum(org.tva_pct)} %</dd></dl>
       <p><button class="btn secondaire" id="params">Modifier les paramètres</button></p>
+      <h3>Logo</h3><div class="actions"><img class="apercu-logo" src="${logoEntreprise()}" alt="Logo actuel">
+        <label class="btn secondaire">Importer un logo<input type="file" id="logo-fichier" accept="image/png,image/jpeg,image/webp" hidden></label>
+        ${org.a_logo ? '<button class="btn danger petit" id="logo-suppr">Retirer</button>' : ''}</div>
+      <p class="muted">PNG, JPEG ou WebP, 300 Ko maximum. Le logo apparaît dans le menu de tous les utilisateurs de votre entreprise.</p>
       <p class="muted">La majoration est appliquée aux heures supplémentaires saisies et figée sur chaque pointage. Vérifiez les taux applicables (Code du travail et conventions collectives du BTP au Sénégal) avant usage pour la paie.</p></div>`);
   const roles = Object.entries(LIB.role);
   const form = (u = {}) => {
@@ -754,6 +761,17 @@ route(/^\/admin$/, async () => {
   };
   $('#nouveau').onclick = () => form();
   $$('[data-edit]').forEach((b) => { b.onclick = () => form(users.find((u) => u.id === Number(b.dataset.edit))); });
+  const rechargerMoi = async () => { state.moi = await GET('/auth/moi'); rafraichir(); };
+  $('#logo-fichier').onchange = (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    if (f.size > 300 * 1024) { toast('Le logo ne doit pas dépasser 300 Ko.', true); return; }
+    const lecteur = new FileReader();
+    lecteur.onload = () => api('PUT', '/organisation/logo', { image: lecteur.result })
+      .then(() => { toast('Logo enregistré.'); return rechargerMoi(); }).catch((err) => toast(err.message, true));
+    lecteur.readAsDataURL(f);
+  };
+  if ($('#logo-suppr')) $('#logo-suppr').onclick = () => api('DELETE', '/organisation/logo').then(rechargerMoi).catch((err) => toast(err.message, true));
   $('#params').onclick = () => formulaire({ titre: 'Paramètres', champs: [
     { name: 'nom', label: 'Raison sociale', required: true, value: org.nom },
     { name: 'heures_jour_standard', label: 'Heures par journée standard', type: 'number', min: 1, value: org.heures_jour_standard },
@@ -770,4 +788,4 @@ route(/^\/journal$/, async () => {
     </tbody></table></div>` : '<div class="panneau vide">Aucune opération.</div>'}`);
 });
 
-router();
+GET('/config').then((c) => { state.config = c; document.title = c.nom_produit; }).catch(() => {}).finally(router);
