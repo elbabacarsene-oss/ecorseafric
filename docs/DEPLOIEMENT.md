@@ -3,8 +3,8 @@
 ## Ce qu'il faut avant de commencer
 | Élément | Où l'obtenir | Variable |
 |---|---|---|
-| Un nom de domaine (ex. `app.mondomaine.sn`) | Registrar (.sn : NIC Sénégal, ou .com) | `APP_URL` |
-| Un compte Render (ou Railway / Scalingo) | Voir ci-dessous | fourni par la plateforme |
+| Le domaine **www.bati.com** (accès à sa zone DNS chez le registrar) | Registrar du domaine | `APP_URL` (déjà configuré) |
+| Un compte **Render** | render.com | fourni par la plateforme |
 | Compte **Wave Business** + clé API Checkout | Portail Wave Business → Développeurs | `WAVE_API_KEY` |
 | Secret de webhook Wave | Même portail, en déclarant l'URL `https://VOTRE_DOMAINE/api/webhooks/wave` | `WAVE_WEBHOOK_SECRET` |
 | Compte **Brevo** + clé API + expéditeur vérifié | brevo.com → SMTP & API → Clés API ; Expéditeurs & domaines | `BREVO_API_KEY`, `EMAIL_EXPEDITEUR` |
@@ -12,20 +12,32 @@
 
 Pour Brevo, authentifiez votre domaine (enregistrements DKIM/SPF fournis par Brevo) : sans cela, les e-mails de confirmation risquent d'arriver en courrier indésirable.
 
-## Option recommandée — Render (plateforme gérée)
-Le fichier `render.yaml` décrit tout : le service web (construit depuis le `Dockerfile`) et la base PostgreSQL, en région **Francfort**.
+## Option retenue — Render, domaine www.bati.com
+Le fichier `render.yaml` décrit tout : le service web (construit depuis le `Dockerfile`) et la base PostgreSQL, en région **Francfort**. L'adresse `https://www.bati.com`, l'expéditeur `no-reply@bati.com`, le tarif (15 000 F CFA/mois) et l'essai (24 h) sont déjà renseignés.
 
-1. Créer un compte sur render.com et y connecter le compte GitHub qui contient ce dépôt.
+### 1. Déployer
+1. Sur render.com, connecter le compte GitHub qui contient ce dépôt (Account Settings → GitHub).
 2. **New → Blueprint**, choisir ce dépôt et la branche à déployer. Render lit `render.yaml`.
-3. Render demande les valeurs secrètes :
-   - `APP_URL` : l'adresse publique, par exemple `https://btp-manager.onrender.com` au début, puis votre domaine ;
-   - `WAVE_API_KEY`, `WAVE_WEBHOOK_SECRET`, `BREVO_API_KEY`, `EMAIL_EXPEDITEUR`.
-   Le tarif (15 000 F CFA/mois), l'essai (24 h) et la connexion à la base sont déjà renseignés.
-4. Valider : Render crée la base, construit l'image et démarre l'application. Les tables sont créées au premier démarrage.
-5. **Domaine** : Settings → Custom Domains → ajouter `app.votre-domaine.sn`, créer chez votre registrar l'enregistrement DNS indiqué par Render (le certificat HTTPS est automatique), puis mettre à jour `APP_URL`.
-6. **Wave** : dans le portail Wave Business, déclarer le webhook `https://VOTRE_DOMAINE/api/webhooks/wave` et recopier le secret dans `WAVE_WEBHOOK_SECRET`.
+3. Render demande les 3 secrets : `WAVE_API_KEY`, `WAVE_WEBHOOK_SECRET`, `BREVO_API_KEY`. S'ils ne sont pas encore prêts, laisser vide et les ajouter plus tard (service → Environment) : l'application démarre quand même, sans paiement ni envoi d'e-mails.
+4. Choisir les plans payants proposés (voir « Plans » ci-dessous) et valider. Render crée la base, construit l'image et démarre l'application ; les tables sont créées au premier démarrage.
+5. Vérifier `https://btp-manager.onrender.com/sante` (le nom exact est affiché par Render) : réponse `{"ok":true}`.
 
-Plans : `render.yaml` utilise les plans payants d'entrée de gamme (`starter` pour l'application, `basic-256mb` pour la base). L'offre gratuite ne convient pas : l'application s'y met en veille (paiements et première visite très lents) et la base gratuite est supprimée au bout de quelques semaines. Les noms de plans et les tarifs évoluent : si Render refuse un nom de plan à l'import, choisissez l'équivalent dans la liste qu'il propose. Les sauvegardes de la base sont incluses dans les plans payants (vérifiez leur durée de conservation dans l'onglet de la base).
+### 2. Brancher www.bati.com
+1. Dans le service `btp-manager` → **Settings → Custom Domains** → ajouter `www.bati.com` (et `bati.com`, pour que l'adresse sans « www » redirige vers le site).
+2. Chez le registrar du domaine, créer les enregistrements DNS **exactement tels que Render les affiche** : en général un `CNAME` pour `www` vers l'adresse `….onrender.com`, et un enregistrement `A` (ou `ALIAS`) pour `bati.com`.
+3. Attendre que Render affiche « Verified » et « Certificate issued » (de quelques minutes à quelques heures selon le DNS).
+Tant que le domaine n'est pas actif, les liens des e-mails et le retour de Wave pointent vers www.bati.com et ne fonctionnent pas : faire les tests après cette étape.
+
+### 3. E-mails (Brevo)
+1. Créer le compte Brevo, puis **Expéditeurs, domaines et IP dédiées → Domaines → ajouter bati.com**.
+2. Ajouter chez le registrar les enregistrements DNS donnés par Brevo (code Brevo, DKIM, DMARC) et attendre la validation.
+3. Créer l'expéditeur `no-reply@bati.com`, puis une clé API (**SMTP & API → Clés API**) à coller dans `BREVO_API_KEY` sur Render.
+
+### 4. Paiements (Wave)
+1. Dans le portail **Wave Business → Développeurs**, créer une clé API Checkout → `WAVE_API_KEY` sur Render.
+2. Déclarer le webhook `https://www.bati.com/api/webhooks/wave` (événements de session de paiement) et recopier son secret → `WAVE_WEBHOOK_SECRET`.
+
+Plans : `render.yaml` utilise les plans payants d'entrée de gamme (`starter` pour l'application, `basic-256mb` pour la base). L'offre gratuite ne convient pas : l'application s'y met en veille (paiements et première visite très lents) et la base gratuite est supprimée au bout de quelques semaines. Si Render refuse un nom de plan à l'import, choisir l'équivalent dans la liste proposée. Les sauvegardes de la base sont incluses dans les plans payants (vérifier leur durée de conservation dans l'onglet de la base).
 
 ## Autres plateformes gérées
 **Railway** (`railway.json`) : New Project → Deploy from GitHub repo ; ajouter un service **PostgreSQL** au projet ; dans les variables du service web, référencer la base (`DATABASE_URL=${{Postgres.DATABASE_URL}}`) et ajouter les variables de `.env.example`. Generate Domain (ou domaine personnalisé), puis renseigner `APP_URL`.

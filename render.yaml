@@ -29,15 +29,15 @@ services:
         value: "24"
       - key: ABONNEMENT_PRIX_MENSUEL_XOF
         value: "15000"
-      - key: APP_URL                 # ex. https://app.votre-domaine.sn (ou l'adresse .onrender.com)
-        sync: false
+      - key: APP_URL                 # adresse publique : liens des e-mails et retour de Wave
+        value: https://www.bati.com
       - key: WAVE_API_KEY
         sync: false
       - key: WAVE_WEBHOOK_SECRET
         sync: false
       - key: BREVO_API_KEY
         sync: false
-      - key: EMAIL_EXPEDITEUR
-        sync: false
+      - key: EMAIL_EXPEDITEUR        # doit être validé dans Brevo (domaine bati.com authentifié)
+        value: no-reply@bati.com
       - key: EMAIL_EXPEDITEUR_NOM
         value: BTP Manager 360
