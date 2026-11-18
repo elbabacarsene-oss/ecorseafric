@@ -1,6 +1,7 @@
 'use strict';
 // Accès à PostgreSQL. Toutes les tables métier portent un org_id : chaque
 // entreprise cliente du SaaS est isolée, et le filtre est appliqué dans chaque requête serveur.
+const crypto = require('node:crypto');
 const { Pool, types } = require('pg');
 
 // Conversions : entiers 64 bits et numeric en nombres JS, dates SQL en chaînes AAAA-MM-JJ
@@ -223,6 +224,13 @@ CREATE INDEX IF NOT EXISTS idx_audit_org ON audit_log(org_id, id DESC);
 ALTER TABLE pointages ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
 
 -- Opérations envoyées par les appareils : un même identifiant n'est appliqué qu'une fois
+-- Limites anti-abus (tentatives de connexion, inscriptions…) partagées entre toutes les instances
+CREATE TABLE IF NOT EXISTS tentatives (
+  cle TEXT NOT NULL,
+  le TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_tentatives ON tentatives (cle, le);
+
 CREATE TABLE IF NOT EXISTS operations_sync (
   id TEXT PRIMARY KEY,
   org_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
@@ -272,18 +280,24 @@ const optionSsl = (mode) => {
   throw new Error(`DATABASE_SSL invalide : « ${mode} » (valeurs : require, no-verify)`);
 };
 
-async function openDb(connectionString, { reinitialiser = false, ssl = '' } = {}) {
-  const pool = new Pool({ connectionString, ssl: optionSsl(ssl), max: Number(process.env.PG_POOL_MAX) || 10, connectionTimeoutMillis: 10000 });
+const EMPREINTE_SCHEMA = crypto.createHash('sha256').update(SCHEMA).digest('hex').slice(0, 16);
+
+async function openDb(connectionString, { reinitialiser = false, ssl = '', max = 10 } = {}) {
+  const pool = new Pool({ connectionString, ssl: optionSsl(ssl), max, connectionTimeoutMillis: 10000, idleTimeoutMillis: 30000 });
+  // Une connexion du pool qui tombe (base redémarrée, pooler) ne doit pas arrêter le processus
+  pool.on('error', (e) => console.error('[db] connexion perdue :', e.message));
   const db = new Base(pool);
   if (reinitialiser) await pool.query('DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;');
-  // Verrou consultatif : plusieurs instances qui démarrent ensemble n'appliquent pas le schéma en même temps
-  const c = await pool.connect();
-  try {
-    await c.query('SELECT pg_advisory_lock(424242)');
-    await c.query(SCHEMA);
-  } finally {
-    await c.query('SELECT pg_advisory_unlock(424242)').catch(() => {});
-    c.release();
+  // Démarrage rapide : le schéma n'est appliqué que s'il a changé depuis le dernier démarrage
+  const aJour = await pool.query(`SELECT valeur FROM meta WHERE cle = 'schema'`).then((r) => r.rows[0] && r.rows[0].valeur === EMPREINTE_SCHEMA, () => false);
+  if (!aJour) {
+    // Verrou de transaction (et non de session) : fonctionne derrière un pooler de connexions (Neon, PgBouncer)
+    await db.tx(async (t) => {
+      await t.query('SELECT pg_advisory_xact_lock(424242)');
+      await t.query(SCHEMA + `
+        CREATE TABLE IF NOT EXISTS meta (cle TEXT PRIMARY KEY, valeur TEXT NOT NULL);
+        INSERT INTO meta (cle, valeur) VALUES ('schema', '${EMPREINTE_SCHEMA}') ON CONFLICT (cle) DO UPDATE SET valeur = EXCLUDED.valeur;`);
+    });
   }
   return db;
 }

@@ -11,8 +11,13 @@ function lireConfig(surcharges = {}) {
     databaseSsl: e.DATABASE_SSL || '',
     // Proxys de confiance devant l'application. Par défaut : uniquement les adresses privées,
     // ce qui donne la vraie IP du visiteur chez les hébergeurs sans permettre de la falsifier.
-    trustProxy: e.TRUST_PROXY || 'loopback, linklocal, uniquelocal',
-    appUrl: (e.APP_URL || 'http://localhost:3000').replace(/\/$/, ''),
+    // Sur Vercel, l'en-tête X-Forwarded-For est réécrit par la plateforme (pas de falsification possible)
+    trustProxy: e.TRUST_PROXY || (e.VERCEL ? 'true' : 'loopback, linklocal, uniquelocal'),
+    // Connexions par instance : peu sur Vercel (nombreuses instances, pooler Neon)
+    pgPoolMax: Number(e.PG_POOL_MAX || (e.VERCEL ? 3 : 10)),
+    // Adresse publique (liens des e-mails, retour Wave). Sur Vercel sans APP_URL : l'adresse du déploiement.
+    appUrl: (e.APP_URL || (e.VERCEL_ENV === 'preview' && e.VERCEL_URL ? `https://${e.VERCEL_URL}`
+      : e.VERCEL_PROJECT_PRODUCTION_URL ? `https://${e.VERCEL_PROJECT_PRODUCTION_URL}` : 'http://localhost:3000')).replace(/\/$/, ''),
     secureCookies: e.COOKIE_SECURE === '1',
     inscriptionOuverte: e.INSCRIPTION_OUVERTE !== '0',
     nomProduit: e.NOM_PRODUIT || 'BTP Manager 360',

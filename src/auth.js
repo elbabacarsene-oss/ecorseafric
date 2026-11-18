@@ -137,17 +137,16 @@ function requirePerm(perm) {
   };
 }
 
-// Limitation simple en mémoire : renvoie true si plus de `max` essais dans la fenêtre.
+// Limitation des tentatives, stockée dans PostgreSQL : valable quel que soit le nombre d'instances
+// (Vercel lance plusieurs copies de l'application). Renvoie true si plus de `max` essais dans la fenêtre.
 // Connexion : 10 essais / 15 min par IP+email. Inscription : 5 espaces / heure par IP.
-const tentatives = new Map();
-function limiterConnexion(cle, max = 10, fenetreMs = 15 * 60 * 1000) {
-  const now = Date.now();
-  const t = (tentatives.get(cle) || []).filter((x) => now - x < fenetreMs);
-  t.push(now);
-  tentatives.set(cle, t);
-  return t.length > max;
+async function limiterConnexion(db, cle, max = 10, fenetreMs = 15 * 60 * 1000) {
+  await db.run('INSERT INTO tentatives (cle) VALUES (?)', cle);
+  const { n } = await db.get(`SELECT COUNT(*) AS n FROM tentatives WHERE cle = ? AND le > now() - make_interval(secs => ?)`, cle, fenetreMs / 1000);
+  if (Math.random() < 0.02) await db.run(`DELETE FROM tentatives WHERE le < now() - interval '1 day'`);
+  return n > max;
 }
-function reinitialiserTentatives(cle) { tentatives.delete(cle); }
+function reinitialiserTentatives(db, cle) { return db.run('DELETE FROM tentatives WHERE cle = ?', cle); }
 
 module.exports = {
   COOKIE, PERMISSIONS, ROLES_RESTREINTS_CHANTIER,

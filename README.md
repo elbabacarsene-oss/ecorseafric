@@ -37,7 +37,7 @@ DATABASE_URL_TEST=postgres://utilisateur:mdp@localhost:5432/btp_test npm test
 Toutes les variables de configuration sont décrites dans [.env.example](.env.example).
 
 ## Mise en production
-Déploiement sur **Render** en quelques clics grâce à `render.yaml` (application + PostgreSQL gérée, région Francfort). Railway, Scalingo et serveur Docker sont aussi pris en charge : voir [docs/DEPLOIEMENT.md](docs/DEPLOIEMENT.md).
+Hébergement sur **Vercel** (région Paris) avec une base **PostgreSQL Neon** : voir [docs/DEPLOIEMENT.md](docs/DEPLOIEMENT.md). Un `Dockerfile` reste disponible pour un serveur classique.
 
 Tarif configuré : **15 000 F CFA par mois** (1, 3, 6 ou 12 mois), essai gratuit de 24 h.
 

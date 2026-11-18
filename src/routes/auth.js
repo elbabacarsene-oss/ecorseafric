@@ -30,7 +30,7 @@ module.exports = function authRoutes(db, cfg, emetteur) {
   // ---------- Inscription : nouvel espace entreprise + premier administrateur ----------
   r.post('/auth/inscription', async (req, res) => {
     if (!cfg.inscriptionOuverte) throw new HttpError(403, 'Les inscriptions sont fermées sur cette instance.');
-    if (A.limiterConnexion(`inscription|${req.ip}`, 5, 60 * 60 * 1000)) throw new HttpError(429, 'Trop de créations d\'espace depuis cette adresse. Réessayez dans une heure.');
+    if (await A.limiterConnexion(db, `inscription|${req.ip}`, 5, 60 * 60 * 1000)) throw new HttpError(429, 'Trop de créations d\'espace depuis cette adresse. Réessayez dans une heure.');
     const entreprise = texte(req.body.entreprise, 'Entreprise', { requis: true, max: 120 });
     const nom = texte(req.body.nom, 'Nom', { requis: true, max: 120 });
     const email = lireEmail(req.body.email);
@@ -53,7 +53,7 @@ module.exports = function authRoutes(db, cfg, emetteur) {
 
   r.post('/auth/renvoyer-confirmation', A.requireAuth, async (req, res) => {
     if (req.user.email_verifie) return res.json({ ok: true, deja_verifie: true });
-    if (A.limiterConnexion(`renvoi|${req.user.id}`, 3, 60 * 60 * 1000)) throw new HttpError(429, 'Trop de demandes. Réessayez dans une heure.');
+    if (await A.limiterConnexion(db, `renvoi|${req.user.id}`, 3, 60 * 60 * 1000)) throw new HttpError(429, 'Trop de demandes. Réessayez dans une heure.');
     await envoyerConfirmation(req.user);
     res.json({ ok: true });
   });
@@ -77,12 +77,12 @@ module.exports = function authRoutes(db, cfg, emetteur) {
   r.post('/auth/connexion', async (req, res) => {
     const email = String(req.body.email || '').trim().toLowerCase();
     const cle = `${req.ip}|${email}`;
-    if (A.limiterConnexion(cle)) throw new HttpError(429, 'Trop de tentatives. Réessayez dans 15 minutes.');
+    if (await A.limiterConnexion(db, cle)) throw new HttpError(429, 'Trop de tentatives. Réessayez dans 15 minutes.');
     const u = await db.get('SELECT * FROM users WHERE lower(email) = ?', email);
     if (!u || !u.actif || !A.verifyPassword(String(req.body.mot_de_passe || ''), u.password_hash)) {
       throw new HttpError(401, 'Email ou mot de passe incorrect.');
     }
-    A.reinitialiserTentatives(cle);
+    await A.reinitialiserTentatives(db, cle);
     const token = await A.creerSession(db, u.id);
     await audit(db, u, 'connexion', 'utilisateur', u.id);
     res.setHeader('Set-Cookie', A.cookieSession(token, cfg.secureCookies));
@@ -99,7 +99,7 @@ module.exports = function authRoutes(db, cfg, emetteur) {
   // Réponse identique que le compte existe ou non (on ne révèle pas quelles adresses sont inscrites)
   r.post('/auth/mot-de-passe-oublie', async (req, res) => {
     const email = String(req.body.email || '').trim().toLowerCase();
-    if (A.limiterConnexion(`oubli|${req.ip}`, 10, 60 * 60 * 1000) || A.limiterConnexion(`oubli|${email}`, 3, 60 * 60 * 1000)) {
+    if (await A.limiterConnexion(db, `oubli|${req.ip}`, 10, 60 * 60 * 1000) || await A.limiterConnexion(db, `oubli|${email}`, 3, 60 * 60 * 1000)) {
       throw new HttpError(429, 'Trop de demandes. Réessayez dans une heure.');
     }
     const u = EMAIL_RE.test(email) ? await db.get('SELECT * FROM users WHERE lower(email) = ? AND actif = 1', email) : null;

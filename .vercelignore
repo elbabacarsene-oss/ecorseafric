@@ -1,0 +1,6 @@
+test
+docs
+Dockerfile
+docker-compose.yml
+.env*
+*.docx

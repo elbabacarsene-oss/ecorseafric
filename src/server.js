@@ -11,13 +11,13 @@ const { abonnementRoutes, webhookWave } = require('./routes/abonnement');
 
 async function createApp(options = {}) {
   const cfg = lireConfig(options);
-  const db = await openDb(cfg.databaseUrl, { reinitialiser: !!options.reinitialiserBase, ssl: cfg.databaseSsl });
+  const db = await openDb(cfg.databaseUrl, { reinitialiser: !!options.reinitialiserBase, ssl: cfg.databaseSsl, max: cfg.pgPoolMax });
   const emetteur = creerEmetteur(cfg.email);
   const wave = creerClientWave(cfg.wave);
   const app = express();
   app.disable('x-powered-by');
   // Derrière un proxy (hébergeur, Caddy/Nginx) : nombre de proxys ou plages d'adresses de confiance
-  app.set('trust proxy', /^\d+$/.test(cfg.trustProxy) ? Number(cfg.trustProxy) : cfg.trustProxy);
+  app.set('trust proxy', cfg.trustProxy === 'true' ? true : /^\d+$/.test(cfg.trustProxy) ? Number(cfg.trustProxy) : cfg.trustProxy);
 
   // En-têtes de sécurité
   app.use((_req, res, next) => {
