@@ -95,7 +95,7 @@ module.exports = function pointageRoutes(db) {
     const lignes = (await db.all(`
       SELECT o.id AS ouvrier_id, o.matricule, o.nom, o.prenom, o.metier, o.taux_horaire AS taux_actuel, o.actif,
         p.id, p.presence, p.heures_normales, p.heures_sup, p.observation, p.statut, p.taux_horaire, p.majoration_hs_pct,
-        p.motif_rejet, p.saisi_le, us.nom AS saisi_par_nom, uv.nom AS valide_par_nom, p.saisi_par
+        p.motif_rejet, p.saisi_le, p.version, us.nom AS saisi_par_nom, uv.nom AS valide_par_nom, p.saisi_par
       FROM ouvriers o
       LEFT JOIN pointages p ON p.ouvrier_id = o.id AND p.chantier_id = ? AND p.date = ?
       LEFT JOIN users us ON us.id = p.saisi_par
@@ -117,9 +117,19 @@ module.exports = function pointageRoutes(db) {
     if (!Array.isArray(req.body.lignes) || req.body.lignes.length === 0) throw new HttpError(400, 'Aucune ligne de pointage.');
     if (req.body.lignes.length > 500) throw new HttpError(400, 'Trop de lignes dans une seule feuille.');
     const org = await db.get('SELECT * FROM organisations WHERE id = ?', req.user.org_id);
+    // Identifiant d'opération fourni par l'appareil (mode hors ligne) : un renvoi n'est jamais appliqué deux fois
+    const opId = req.body.operation_id === undefined ? null : String(req.body.operation_id);
+    if (opId !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(opId)) throw new HttpError(400, 'Identifiant d\'opération invalide.');
+    const horsLigne = req.body.saisi_hors_ligne_le ? String(req.body.saisi_hors_ligne_le).slice(0, 40) : null;
 
-    const resultat = { enregistrees: 0, ignorees: [] };
+    const resultat = { enregistrees: 0, ignorees: [], conflits: [], versions: {} };
+    let deja = null;
     await db.tx(async (t) => {
+      if (opId) {
+        // Si une requête identique est en cours, cette insertion attend sa fin : pas de double application
+        const n = await t.run('INSERT INTO operations_sync (id, org_id, user_id) VALUES (?, ?, ?) ON CONFLICT (id) DO NOTHING', opId, req.user.org_id, req.user.id);
+        if (n === 0) { deja = await t.get('SELECT * FROM operations_sync WHERE id = ?', opId); return; }
+      }
       for (const l of req.body.lignes) {
         const o = await t.get(`SELECT o.* FROM ouvriers o JOIN affectations a ON a.ouvrier_id = o.id
           WHERE o.id = ? AND a.chantier_id = ? AND o.org_id = ? AND o.actif = 1`, id(l.ouvrier_id, 'Ouvrier'), ch.id, req.user.org_id);
@@ -136,19 +146,41 @@ module.exports = function pointageRoutes(db) {
         const obs = texte(l.observation, 'Observation', { max: 300 });
         const ex = await t.get('SELECT * FROM pointages WHERE ouvrier_id = ? AND chantier_id = ? AND date = ? FOR UPDATE', o.id, ch.id, jour);
         if (ex && ex.statut === 'valide') { resultat.ignorees.push({ ouvrier_id: o.id, raison: 'Pointage déjà validé' }); continue; }
+        // Conflit : la ligne a changé depuis que l'appareil l'a lue (autre saisie, validation, rejet)
+        if (Object.prototype.hasOwnProperty.call(l, 'version')) {
+          const attendue = l.version === null ? null : Number(l.version);
+          if ((ex ? ex.version : null) !== attendue) {
+            const auteur = ex ? (await t.get('SELECT nom FROM users WHERE id = ?', ex.valide_par || ex.saisi_par) || {}).nom : null;
+            resultat.conflits.push({ ouvrier_id: o.id, nom: `${o.nom} ${o.prenom || ''}`.trim(), version_serveur: ex ? ex.version : null,
+              statut_serveur: ex ? ex.statut : null,
+              raison: `Ligne modifiée entre-temps${auteur ? ` par ${auteur}` : ''}${ex && ex.statut === 'rejete' ? ' (rejetée)' : ''}. Votre saisie n'a pas été appliquée.` });
+            continue;
+          }
+        }
         if (ex) {
           await t.run(`UPDATE pointages SET presence=?, heures_normales=?, heures_sup=?, taux_horaire=?, majoration_hs_pct=?,
-            observation=?, statut='saisi', saisi_par=?, saisi_le=now(), valide_par=NULL, valide_le=NULL, motif_rejet=NULL WHERE id=?`,
+            observation=?, statut='saisi', saisi_par=?, saisi_le=now(), valide_par=NULL, valide_le=NULL, motif_rejet=NULL, version = version + 1 WHERE id=?`,
             presence, h.heures_normales, h.heures_sup, o.taux_horaire, org.majoration_hs_pct, obs, req.user.id, ex.id);
+          resultat.versions[o.id] = ex.version + 1;
         } else {
+          resultat.versions[o.id] = 1;
           await t.run(`INSERT INTO pointages (org_id, chantier_id, ouvrier_id, date, presence, heures_normales, heures_sup,
             taux_horaire, majoration_hs_pct, observation, saisi_par) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
             req.user.org_id, ch.id, o.id, jour, presence, h.heures_normales, h.heures_sup, o.taux_horaire, org.majoration_hs_pct, obs, req.user.id);
         }
         resultat.enregistrees++;
       }
-      await audit(t, req.user, 'saisie_pointage', 'chantier', ch.id, { date: jour, lignes: resultat.enregistrees });
+      await audit(t, req.user, 'saisie_pointage', 'chantier', ch.id,
+        { date: jour, lignes: resultat.enregistrees, conflits: resultat.conflits.length || undefined, hors_ligne: horsLigne || undefined, operation: opId || undefined });
+      if (opId) {
+        await t.run('UPDATE operations_sync SET resultat = ? WHERE id = ?', JSON.stringify(resultat), opId);
+        await t.run(`DELETE FROM operations_sync WHERE created_at < now() - interval '60 days'`);
+      }
     });
+    if (deja) {
+      if (deja.user_id !== req.user.id) throw new HttpError(409, 'Identifiant d\'opération déjà utilisé.');
+      return res.json({ ...deja.resultat, rejouee: true });
+    }
     res.json(resultat);
   });
 
@@ -169,7 +201,7 @@ module.exports = function pointageRoutes(db) {
           resultat.ignorees.push({ id: p.id, raison: 'Vous ne pouvez pas valider votre propre saisie.' });
           continue;
         }
-        await t.run(`UPDATE pointages SET statut = ?, valide_par = ?, valide_le = now(), motif_rejet = ? WHERE id = ?`,
+        await t.run(`UPDATE pointages SET statut = ?, valide_par = ?, valide_le = now(), motif_rejet = ?, version = version + 1 WHERE id = ?`,
           action === 'valider' ? 'valide' : 'rejete', req.user.id, action === 'rejeter' ? motif : null, p.id);
         resultat.traitees++;
       }
@@ -184,7 +216,7 @@ module.exports = function pointageRoutes(db) {
     const p = await db.get('SELECT * FROM pointages WHERE id = ? AND org_id = ?', id(req.params.id, 'Pointage'), req.user.org_id);
     if (!p) throw new HttpError(404, 'Pointage introuvable.');
     const motif = texte(req.body.motif, 'Motif', { requis: true, max: 300 });
-    await db.run(`UPDATE pointages SET statut = 'saisi', valide_par = NULL, valide_le = NULL WHERE id = ?`, p.id);
+    await db.run(`UPDATE pointages SET statut = 'saisi', valide_par = NULL, valide_le = NULL, version = version + 1 WHERE id = ?`, p.id);
     await audit(db, req.user, 'deverrouillage_pointage', 'pointage', p.id, { motif, avant: p });
     res.json({ ok: true });
   });

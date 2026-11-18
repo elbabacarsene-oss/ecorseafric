@@ -37,6 +37,15 @@
 
 **Séparation des tâches** : on ne valide ni son propre pointage ni sa propre étude (sauf l'administrateur). Un pointage validé est verrouillé ; une étude validée n'est plus modifiable sans repasser en brouillon.
 
+## Pointage hors connexion
+- **Application installable** (PWA : `public/manifest.webmanifest`, `public/sw.js`). Le service worker garde l'application et, en lecture seule, le profil, la liste des chantiers, les feuilles déjà ouvertes et les ouvriers affectés aux chantiers actifs (« réseau d'abord » : avec du réseau, on a toujours la version à jour).
+- **Boîte d'envoi** (`public/hors-ligne.js`, IndexedDB) : chaque enregistrement de feuille est d'abord écrit sur l'appareil, puis envoyé. Sans réseau, il reste en file et part automatiquement au retour de la connexion (événement « online », retour sur l'application, toutes les 30 s), application ouverte.
+- **Pas de doublon** : chaque opération porte un identifiant unique (`operation_id`, UUID). Le serveur l'enregistre dans `operations_sync` dans la même transaction que les lignes ; un renvoi renvoie le résultat déjà calculé sans rien réappliquer, même si deux envois identiques arrivent en même temps.
+- **Conflits** : chaque ligne de pointage a une `version`, incrémentée à chaque saisie, validation, rejet ou déverrouillage. L'appareil envoie la version qu'il a lue ; si elle ne correspond plus, la ligne n'est pas écrasée et figure dans `conflits` (affichée dans « Synchronisation → À revoir »).
+- Plusieurs modifications hors ligne d'une même feuille sont fusionnées dans une seule opération tant qu'elle n'a pas pu atteindre le serveur. Si une opération est « incertaine » (connexion coupée pendant l'envoi), la suivante est chaînée : elle attend la version que le serveur renvoie pour la première.
+- Une saisie refusée définitivement (ouvrier désaffecté, abonnement expiré…) reste sur l'appareil jusqu'à ce que l'utilisateur la renvoie ou la supprime. À la déconnexion, les données consultées sont effacées de l'appareil ; les saisies non envoyées sont conservées (avec avertissement) et partent à la prochaine connexion du même utilisateur.
+- Limites : l'envoi se fait application ouverte (pas de synchronisation en arrière-plan sur iPhone) ; les données gardées sur l'appareil ne sont pas chiffrées (aucun salaire n'y figure pour un chef de chantier) ; la validation, les études et l'administration nécessitent une connexion.
+
 ## Essai et abonnement
 - L'essai (24 h, `ESSAI_HEURES`) démarre à la confirmation de l'e-mail de l'administrateur fondateur.
 - État d'accès : `essai`, `abonne`, `expire`, `non_demarre`. Hors `essai`/`abonne`, toute écriture renvoie **402** (sauf authentification et abonnement) ; la lecture reste possible.
@@ -62,7 +71,6 @@ Les lignes conservent une copie du DS : modifier un prix de la bibliothèque n'a
 `organisations` (essai, abonnement, logo) → `users` (+ `user_chantiers`, `sessions`, `jetons`), `paiements`, `chantiers`, `ouvriers` (+ `affectations`), `pointages`, `ressources`, `ouvrages` (+ `ouvrage_composants`), `etudes` (+ `etude_lignes`), `audit_log`. Voir `src/db.js`.
 
 ## Limites de cette version
-- Pas de mode hors ligne (prévu à l'étape 6 du cahier des charges : PWA avec file de synchronisation).
 - PDF via l'impression du navigateur ; export Excel en CSV (séparateur « ; »).
 - La majoration des heures sup. est un taux unique paramétrable : les paliers légaux (heures de nuit, jours fériés…) et la paie réglementaire ne sont pas calculés.
 - Les limites anti-abus (tentatives de connexion, inscriptions) sont gardées en mémoire : elles valent par instance. Avec plusieurs instances, les stocker dans PostgreSQL ou Redis.

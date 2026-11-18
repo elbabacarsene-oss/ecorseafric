@@ -1,0 +1,15 @@
+{
+  "name": "BTP Manager 360 — Pointage & déboursés secs",
+  "short_name": "BTP 360",
+  "description": "Pointage du personnel de chantier, y compris sans réseau, et déboursés secs.",
+  "lang": "fr",
+  "start_url": "/#/pointage",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#083d6e",
+  "theme_color": "#0b5394",
+  "icons": [
+    { "src": "/icone-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icone-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

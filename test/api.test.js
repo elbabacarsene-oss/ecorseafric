@@ -231,6 +231,62 @@ test('pointage : saisie, contrôles, masquage des salaires, validation à quatre
   assert.match(r.body, /Diop Moussa/);
 });
 
+test('mode hors ligne : envoi rejoué sans doublon et détection des conflits', async () => {
+  const { chef_chantier: chef, conducteur } = ctx;
+  const avantHier = new Date(Date.parse(jour) - 2 * 86400000).toISOString().slice(0, 10);
+  const url = `/chantiers/${ctx.ch1}/pointage`;
+  let f = (await chef.get(`${url}?date=${avantHier}`)).body;
+  const ligne = (ouvrierId) => f.lignes.find((l) => l.ouvrier_id === ouvrierId);
+  assert.equal(ligne(ctx.o1).version, null, 'ligne pas encore saisie');
+
+  // Saisie faite hors ligne puis envoyée deux fois (réseau coupé avant la réponse)
+  const op = crypto.randomUUID();
+  const corps = { date: avantHier, operation_id: op, saisi_hors_ligne_le: new Date().toISOString(), lignes: [
+    { ouvrier_id: ctx.o1, presence: 'present', heures_normales: 8, version: null },
+    { ouvrier_id: ctx.o2, presence: 'present', heures_normales: 7, version: null }] };
+  let r = await chef.put(url, corps);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.enregistrees, 2);
+  r = await chef.put(url, corps);
+  assert.equal(r.body.rejouee, true);
+  assert.equal(r.body.enregistrees, 2, 'même résultat renvoyé');
+  f = (await chef.get(`${url}?date=${avantHier}`)).body;
+  assert.equal(ligne(ctx.o1).version, 1);
+
+  // Le conducteur rejette une ligne pendant que le chef, hors ligne, la corrige sur une ancienne version
+  await conducteur.post(`${url}/validation`, { date: avantHier, action: 'rejeter', motif: 'Heures à vérifier', ids: [ligne(ctx.o2).id] });
+  r = await chef.put(url, { date: avantHier, operation_id: crypto.randomUUID(), lignes: [
+    { ouvrier_id: ctx.o1, presence: 'present', heures_normales: 6, version: 1 },
+    { ouvrier_id: ctx.o2, presence: 'present', heures_normales: 9, version: 1 }] });
+  assert.equal(r.body.enregistrees, 1);
+  assert.equal(r.body.conflits.length, 1);
+  assert.equal(r.body.conflits[0].ouvrier_id, ctx.o2);
+  assert.match(r.body.conflits[0].raison, /rejetée/);
+  f = (await chef.get(`${url}?date=${avantHier}`)).body;
+  assert.equal(ligne(ctx.o2).heures_normales, 7, 'la ligne en conflit n\'est pas écrasée');
+  assert.equal(ligne(ctx.o1).heures_normales, 6);
+  assert.equal(ligne(ctx.o1).version, 2);
+
+  // Le renvoi de la première opération, même après ces changements, ne réécrit rien
+  r = await chef.put(url, corps);
+  assert.equal(r.body.rejouee, true);
+  assert.equal((await chef.get(`${url}?date=${avantHier}`)).body.lignes.find((l) => l.ouvrier_id === ctx.o1).heures_normales, 6);
+
+  // Deux envois simultanés de la même opération : une seule application
+  const op2 = crypto.randomUUID();
+  const c2 = { date: avantHier, operation_id: op2, lignes: [{ ouvrier_id: ctx.o1, presence: 'demi_journee', version: 2 }] };
+  const [a, b] = await Promise.all([chef.put(url, c2), chef.put(url, c2)]);
+  assert.deepEqual([a.status, b.status], [200, 200]);
+  assert.equal([a.body, b.body].filter((x) => x.rejouee).length, 1);
+  assert.equal((await chef.get(`${url}?date=${avantHier}`)).body.lignes.find((l) => l.ouvrier_id === ctx.o1).version, 3);
+
+  // Identifiant invalide, ou réutilisé par un autre utilisateur
+  assert.equal((await chef.put(url, { ...c2, operation_id: 'pas-un-uuid' })).status, 400);
+  assert.equal((await conducteur.put(url, c2)).status, 409);
+  // Nettoyage : remet la ligne de l'ouvrier 2 dans un état neutre pour la suite
+  await ctx.admin.put(url, { date: avantHier, lignes: [{ ouvrier_id: ctx.o2, presence: 'absent' }] });
+});
+
 test('déboursé sec : bibliothèque, étude, validation et synthèse chantier', async () => {
   const { metreur, direction, chef_chantier: chef } = ctx;
   const res = {};

@@ -8,6 +8,9 @@ Cette première version couvre le **socle** (authentification, rôles, entrepris
 
 Les deux modules sont reliés : la **main-d'œuvre réelle** (pointages validés) est comparée à la **main-d'œuvre prévue** au déboursé sec de l'étude acceptée du chantier.
 
+## Pointage sur le chantier, même sans réseau
+L'application s'installe sur le téléphone (menu du navigateur → « Ajouter à l'écran d'accueil »). Sans connexion, le chef de chantier pointe normalement : la saisie est gardée sur l'appareil et envoyée automatiquement au retour du réseau, sans doublon. Si quelqu'un a modifié la même ligne entre-temps, elle n'est pas écrasée et apparaît dans « Synchronisation ».
+
 ## Fonctionnement du SaaS
 - **Inscription libre** : chaque entreprise crée son espace et en devient l'administrateur. Les espaces sont totalement isolés.
 - **Confirmation de l'e-mail** obligatoire avant d'accéder à l'espace ; **mot de passe oublié** par lien envoyé par e-mail (Brevo).

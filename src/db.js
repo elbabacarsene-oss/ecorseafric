@@ -218,6 +218,18 @@ CREATE TABLE IF NOT EXISTS audit_log (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_audit_org ON audit_log(org_id, id DESC);
+
+-- Mode hors ligne : version de chaque ligne de pointage (détection des conflits)
+ALTER TABLE pointages ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+
+-- Opérations envoyées par les appareils : un même identifiant n'est appliqué qu'une fois
+CREATE TABLE IF NOT EXISTS operations_sync (
+  id TEXT PRIMARY KEY,
+  org_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  resultat JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `;
 
 // Remplace les « ? » par $1, $2… (aucune requête de l'application n'utilise « ? » dans une chaîne littérale)

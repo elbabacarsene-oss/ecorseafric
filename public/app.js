@@ -23,16 +23,27 @@ const badge = (map, k) => { const v = LIB[map][k] || [k, '']; return `<span clas
 async function api(method, url, body) {
   // Toute requête d'écriture part en JSON (exigé par la protection CSRF du serveur), même sans données
   if (method !== 'GET' && body === undefined) body = {};
-  const res = await fetch('/api' + url, {
-    method, credentials: 'same-origin',
-    headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  let res;
+  try {
+    res = await fetch('/api' + url, {
+      method, credentials: 'same-origin',
+      headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw erreurHorsLigne();
+  }
   if (res.status === 401 && !url.startsWith('/auth/')) { state.moi = null; location.hash = '#/connexion'; throw new Error('Session expirée, reconnectez-vous.'); }
   const data = (res.headers.get('content-type') || '').includes('json') ? await res.json() : null;
   if (res.status === 403 && data && data.code === 'email_non_verifie') { state.moi = null; router(); }
+  if (res.status === 503 && data && data.code === 'hors_ligne') throw erreurHorsLigne(data.error);
   if (!res.ok) throw new Error((data && data.error) || `Erreur ${res.status}`);
   return data;
+}
+function erreurHorsLigne(message) {
+  const e = new Error(message || 'Pas de connexion internet.');
+  e.horsLigne = true;
+  return e;
 }
 const GET = (u) => api('GET', u);
 const POST = (u, b = {}) => api('POST', u, b);
@@ -97,6 +108,7 @@ const NAV = [
   { titre: 'Pointage' },
   { href: '#/pointage', lib: 'Feuille de pointage', perm: 'pointage.lire' },
   { href: '#/pointages', lib: 'Historique & coûts MO', perm: 'pointage.lire' },
+  { href: '#/synchronisation', lib: 'Synchronisation', perm: 'pointage.saisir' },
   { href: '#/personnel', lib: 'Personnel', perm: 'personnel.lire' },
   { titre: 'Déboursé sec' },
   { href: '#/etudes', lib: 'Études de prix', perm: 'debourse.lire' },
@@ -116,11 +128,12 @@ function coquille(contenu) {
   const u = state.moi.utilisateur;
   $('#app').innerHTML = `<div class="layout">
     <aside class="sidebar" id="sidebar"><div class="brand"><img src="${logoEntreprise()}" alt="Logo ${esc(state.moi.organisation.nom)}"><div><b>${esc(state.moi.organisation.nom)}</b><small>${esc(state.config.nom_produit)}</small></div></div><ul class="nav">${nav}</ul></aside>
-    <main class="main"><div class="topbar"><button class="btn secondaire petit menu-mobile" id="burger">☰ Menu</button><span></span>
+    <main class="main"><div class="topbar"><button class="btn secondaire petit menu-mobile" id="burger">☰ Menu</button><span id="etat-sync"></span>
       <div class="user"><span>${esc(u.nom)} · ${esc(LIB.role[u.role])}</span><button class="btn secondaire petit" id="mdp">Mot de passe</button><button class="btn secondaire petit" id="logout">Déconnexion</button></div></div>
       ${bandeauAcces()}<div id="page">${contenu}</div></main></div>`;
   $('#burger').onclick = () => $('#sidebar').classList.toggle('ouvert');
-  $('#logout').onclick = async () => { await POST('/auth/deconnexion'); state.moi = null; location.hash = '#/connexion'; };
+  $('#logout').onclick = () => deconnecter();
+  majIndicateur();
   $('#mdp').onclick = () => formulaire({
     titre: 'Changer mon mot de passe', champs: [
       { name: 'actuel', label: 'Mot de passe actuel', type: 'password', required: true, autocomplete: 'current-password' },
@@ -139,7 +152,15 @@ async function router() {
   if (chemin === '/connexion' || chemin === '/inscription') return pageAuth(chemin === '/inscription');
   if (PAGES_PUBLIQUES[chemin]) return PAGES_PUBLIQUES[chemin](params);
   if (!state.moi) {
-    try { state.moi = await GET('/auth/moi'); } catch { location.hash = '#/connexion'; return; }
+    try { state.moi = await GET('/auth/moi'); } catch (e) {
+      if (e.horsLigne) {
+        $('#app').innerHTML = '<div class="auth"><div class="auth-box"><h3>Pas de connexion internet</h3><p>Ouvrez l\'application une première fois avec du réseau et connectez-vous : vous pourrez ensuite pointer même hors connexion.</p><button class="btn vert" id="reessayer">Réessayer</button></div></div>';
+        $('#reessayer').onclick = () => router();
+        return;
+      }
+      location.hash = '#/connexion'; return;
+    }
+    synchroniserFile();
   }
   if (!state.moi.utilisateur.email_verifie) return pageEmailNonConfirme();
   for (const [re, fn] of ROUTES) {
@@ -179,6 +200,7 @@ function pageAuth(inscription) {
     const v = Object.fromEntries(new FormData(e.target));
     try {
       await POST(inscription ? '/auth/inscription' : '/auth/connexion', v);
+      viderDonneesLocales();
       state.moi = await GET('/auth/moi');
       location.hash = '#/';
     } catch (err) { $('.msg').innerHTML = `<div class="erreur">${esc(err.message)}</div>`; }
@@ -244,8 +266,97 @@ function pageEmailNonConfirme() {
     <div class="actions"><button class="btn vert" id="renvoyer">Renvoyer l'e-mail</button><button class="btn secondaire" id="deja">J'ai confirmé</button><button class="btn secondaire" id="sortir">Déconnexion</button></div>`);
   $('#renvoyer').onclick = () => POST('/auth/renvoyer-confirmation').then(() => msgAuth('E-mail renvoyé.', true)).catch((e) => msgAuth(esc(e.message)));
   $('#deja').onclick = () => { state.moi = null; router(); };
-  $('#sortir').onclick = async () => { await POST('/auth/deconnexion'); state.moi = null; location.hash = '#/connexion'; };
+  $('#sortir').onclick = () => deconnecter();
 }
+
+// ============ Mode hors ligne : synchronisation ============
+function viderDonneesLocales() {
+  if (navigator.serviceWorker && navigator.serviceWorker.controller) navigator.serviceWorker.controller.postMessage('vider-donnees');
+}
+
+async function deconnecter() {
+  if (HorsLigne.disponible && state.moi) {
+    const n = (await HorsLigne.operations(state.moi.utilisateur.id)).length;
+    if (n && !window.confirm(`${n} saisie(s) de pointage ne sont pas encore envoyées. Elles resteront sur cet appareil et partiront à votre prochaine connexion. Se déconnecter quand même ?`)) return;
+  }
+  try { await POST('/auth/deconnexion'); } catch { /* hors ligne : la session expirera d'elle-même */ }
+  viderDonneesLocales();
+  state.moi = null;
+  location.hash = '#/connexion';
+}
+
+async function majIndicateur() {
+  const el = $('#etat-sync');
+  if (!el || !state.moi) return;
+  let html = navigator.onLine ? '' : '<span class="badge rouge">Hors connexion</span> ';
+  if (HorsLigne.disponible) {
+    const uid = state.moi.utilisateur.id;
+    const ops = await HorsLigne.operations(uid);
+    const evts = await HorsLigne.evenements(uid);
+    const echecs = ops.filter((o) => o.statut === 'echec').length;
+    if (ops.length - echecs) html += `<a class="badge orange" href="#/synchronisation">${ops.length - echecs} saisie(s) à envoyer</a> `;
+    if (echecs + evts.length) html += `<a class="badge rouge" href="#/synchronisation">${echecs + evts.length} à revoir</a>`;
+  }
+  if ($('#etat-sync')) $('#etat-sync').innerHTML = html;
+}
+
+async function synchroniserFile({ silencieux = false } = {}) {
+  const vide = { envoyees: 0, conflits: 0, echecs: 0, reste: 0 };
+  if (!HorsLigne.disponible || !state.moi) return vide;
+  const uid = state.moi.utilisateur.id;
+  if (!(await HorsLigne.operations(uid)).some((o) => o.statut === 'en_attente')) { majIndicateur(); return vide; }
+  const b = await HorsLigne.synchroniser(uid);
+  majIndicateur();
+  if (!silencieux && b.envoyees) toast(`${b.envoyees} saisie(s) faite(s) hors connexion envoyée(s).${b.conflits ? ` ${b.conflits} ligne(s) à revoir.` : ''}`, b.conflits > 0);
+  if (!silencieux && b.connexion_requise) toast('Des saisies attendent sur cet appareil : reconnectez-vous pour les envoyer.', true);
+  return b;
+}
+
+// Garde en mémoire de l'appareil les ouvriers des chantiers actifs, pour pointer sans réseau
+let dernierPrechargement = 0;
+function prechargerPourHorsLigne(chantiers) {
+  if (Date.now() - dernierPrechargement < 10 * 60 * 1000 || !peut('personnel.lire')) return;
+  dernierPrechargement = Date.now();
+  chantiers.filter((c) => ['en_cours', 'preparation', 'suspendu'].includes(c.statut)).slice(0, 30)
+    .forEach((c) => GET(`/chantiers/${c.id}/ouvriers`).catch(() => {}));
+}
+
+window.addEventListener('online', () => { majIndicateur(); synchroniserFile(); });
+window.addEventListener('offline', () => majIndicateur());
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') synchroniserFile(); });
+setInterval(() => { if (navigator.onLine) synchroniserFile(); }, 30 * 1000);
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+
+route(/^\/synchronisation$/, async () => {
+  if (!HorsLigne.disponible) { page('<h1>Synchronisation</h1><div class="info">Ce navigateur ne permet pas la saisie hors connexion.</div>'); return; }
+  const uid = state.moi.utilisateur.id;
+  const ops = await HorsLigne.operations(uid);
+  const evts = await HorsLigne.evenements(uid);
+  const lienFeuille = (chId, date) => `#/pointage?chantier=${chId}&date=${date}`;
+  let html = `<h1>Synchronisation</h1>
+    <p class="muted">Les pointages saisis sans réseau sont gardés sur cet appareil puis envoyés automatiquement dès que la connexion revient (application ouverte).
+    Un même envoi n'est jamais enregistré deux fois. Si une ligne a été modifiée entre-temps par quelqu'un d'autre, elle n'est pas écrasée : elle apparaît ci-dessous « à revoir ».</p>
+    <div class="actions"><span class="badge ${navigator.onLine ? 'vert' : 'rouge'}">${navigator.onLine ? 'Connecté' : 'Hors connexion'}</span>
+    ${ops.some((o) => o.statut === 'en_attente') ? '<button class="btn vert" id="envoyer">Envoyer maintenant</button>' : ''}</div>
+    <h2>Saisies sur l'appareil (${ops.length})</h2>`;
+  html += ops.length ? `<div class="table-wrap"><table><thead><tr><th>Chantier</th><th>Date</th><th class="num">Lignes</th><th>Saisi le</th><th class="num">Tentatives</th><th>État</th><th></th></tr></thead><tbody>
+    ${ops.map((o) => `<tr><td>${esc(o.chantier_code)}</td><td>${fmtDate(o.date)}</td><td class="num">${o.lignes.length}</td><td>${fmtDateHeure(o.cree_le)}</td><td class="num">${o.tentatives}</td>
+      <td>${o.statut === 'echec' ? `<span class="badge rouge">Refusé</span> <span class="muted">${esc(o.erreur || '')}</span>` : `<span class="badge orange">À envoyer</span>${o.erreur ? ` <span class="muted">${esc(o.erreur)}</span>` : ''}`}</td>
+      <td class="actions"><a class="btn secondaire petit" href="${lienFeuille(o.chantier_id, o.date)}">Ouvrir</a>
+        ${o.statut === 'echec' ? `<button class="btn secondaire petit" data-reessayer="${o.id}">Réessayer</button>` : ''}
+        <button class="btn danger petit" data-suppr-op="${o.id}">Supprimer</button></td></tr>`).join('')}
+    </tbody></table></div>` : '<div class="panneau vide">Aucune saisie en attente : tout est envoyé.</div>';
+  html += `<h2>À revoir (${evts.length})</h2>`;
+  html += evts.length ? evts.map((e) => `<div class="panneau"><div class="actions"><b>${esc(e.chantier_code)} — ${fmtDate(e.date)}</b><span class="muted">envoyé le ${fmtDateHeure(e.le)}</span>
+      <a class="btn secondaire petit" href="${lienFeuille(e.chantier_id, e.date)}">Ouvrir la feuille</a><button class="btn secondaire petit" data-suppr-evt="${e.id}">Marquer comme traité</button></div>
+      <ul>${e.details.map((d) => `<li>${esc(d.nom || 'Ouvrier ' + d.ouvrier_id)} : ${esc(d.raison)}</li>`).join('')}</ul></div>`).join('')
+    : '<div class="panneau vide">Aucun conflit.</div>';
+  page(html);
+  if ($('#envoyer')) $('#envoyer').onclick = async () => { await synchroniserFile(); rafraichir(); };
+  $$('[data-reessayer]').forEach((b) => { b.onclick = async () => { await HorsLigne.marquerAReessayer(b.dataset.reessayer); await synchroniserFile(); rafraichir(); }; });
+  $$('[data-suppr-op]').forEach((b) => { b.onclick = () => confirmer('Supprimer définitivement cette saisie non envoyée ?', async () => { await HorsLigne.supprimerOperation(b.dataset.supprOp); majIndicateur(); rafraichir(); }); });
+  $$('[data-suppr-evt]').forEach((b) => { b.onclick = async () => { await HorsLigne.supprimerEvenement(Number(b.dataset.supprEvt)); majIndicateur(); rafraichir(); }; });
+});
 
 // ============ Abonnement ============
 const fmtDateHeure = (iso) => (iso ? new Intl.DateTimeFormat('fr-FR', { timeZone: 'Africa/Dakar', dateStyle: 'short', timeStyle: 'short' }).format(new Date(iso)) : '—');
@@ -470,7 +581,30 @@ route(/^\/pointage$/, async (p) => {
     <label>Date<input type="date" name="date" value="${jour}" max="${aujourdhui()}"></label></form>`;
   if (!chId) { page(html + '<div class="panneau vide">Aucun chantier accessible.</div>'); return; }
 
-  const f = await GET(`/chantiers/${chId}/pointage?date=${jour}`);
+  // Feuille du serveur ; sans réseau, copie gardée sur l'appareil ou, à défaut, feuille vierge des ouvriers affectés
+  let f; let source = 'serveur';
+  try {
+    f = await GET(`/chantiers/${chId}/pointage?date=${jour}`);
+    if (navigator.onLine) prechargerPourHorsLigne(chantiers);
+  } catch (e) {
+    if (!e.horsLigne) throw e;
+    let affectes;
+    try { affectes = await GET(`/chantiers/${chId}/ouvriers`); } catch (e2) {
+      if (!e2.horsLigne) throw e2;
+      page(html + '<div class="panneau vide">Pas de connexion, et la liste des ouvriers de ce chantier n\'a pas encore été chargée sur cet appareil. Ouvrez une fois la feuille de ce chantier avec du réseau.</div>');
+      $('#sel').onchange = (ev) => { location.hash = '#/pointage' + qs(Object.fromEntries(new FormData(ev.currentTarget))); };
+      return;
+    }
+    source = 'appareil';
+    f = { chantier: { id: Number(chId) }, date: jour, heures_jour_standard: state.moi.organisation.heures_jour_standard,
+      lignes: affectes.filter((o) => o.actif).map((o) => ({ ouvrier_id: o.id, matricule: o.matricule, nom: o.nom, prenom: o.prenom, metier: o.metier, id: null, statut: null, version: null, cout: null })) };
+  }
+  // Saisies faites sur cet appareil et pas encore envoyées
+  const attente = HorsLigne.disponible ? await HorsLigne.enAttentePourFeuille(state.moi.utilisateur.id, Number(chId), jour) : new Map();
+  for (const l of f.lignes) {
+    const a = attente.get(l.ouvrier_id);
+    if (a && l.statut !== 'valide') Object.assign(l, { presence: a.presence, heures_normales: Number(a.heures_normales), heures_sup: Number(a.heures_sup), observation: a.observation, en_attente: a.op_statut });
+  }
   const saisir = peut('pointage.saisir');
   const voitCout = peut('cout.lire');
   const lignes = f.lignes;
@@ -479,7 +613,7 @@ route(/^\/pointage$/, async (p) => {
     const presence = l.presence || 'present';
     return `<div class="pointage-ligne ${verrou ? 'verrou' : ''} ${l.statut === 'rejete' ? 'rejet' : ''}" data-ouvrier="${l.ouvrier_id}" data-id="${l.id || ''}" data-presence="${presence}">
       <div><div class="nom">${esc(l.nom)} ${esc(l.prenom || '')}</div><div class="muted">${esc(l.matricule)} · ${esc(l.metier)}
-        ${l.statut ? ' · ' + badge('statut_pointage', l.statut) : ' · <span class="badge">Non saisi</span>'}
+        ${l.en_attente ? ` · <span class="badge ${l.en_attente === 'echec' ? 'rouge' : 'orange'}">${l.en_attente === 'echec' ? 'Envoi refusé' : 'Sur l\'appareil, à envoyer'}</span>` : (l.statut ? ' · ' + badge('statut_pointage', l.statut) : ' · <span class="badge">Non saisi</span>')}
         ${l.saisi_par_nom ? ` · saisi par ${esc(l.saisi_par_nom)}` : ''}${l.valide_par_nom ? ` · ${l.statut === 'rejete' ? 'rejeté' : 'validé'} par ${esc(l.valide_par_nom)}` : ''}
         ${voitCout && l.cout !== null ? ` · <b>${fmtXOF(l.cout)}</b>` : ''}</div>
         ${l.motif_rejet ? `<div class="erreur">Motif du rejet : ${esc(l.motif_rejet)}</div>` : ''}</div>
@@ -496,6 +630,7 @@ route(/^\/pointage$/, async (p) => {
       ${saisir && lignes.some((l) => l.statut !== 'valide') ? '<button class="btn secondaire" id="tous-presents">Tous présents</button><button class="btn vert" id="enregistrer">Enregistrer le pointage</button>' : ''}
       ${peut('pointage.valider') && lignes.some((l) => l.statut === 'saisi') ? '<button class="btn" id="valider">Valider la sélection</button><button class="btn danger" id="rejeter">Rejeter</button>' : ''}
     </div></div>` : `<div class="panneau vide">Aucun ouvrier affecté à ce chantier. ${peut('personnel.ecrire') ? `<a href="#/chantiers/${chId}">Gérer les affectations</a>` : ''}</div>`;
+  if (source === 'appareil') html = html.replace('<div class="table-wrap" id="feuille">', '<div class="info">Hors connexion : feuille préparée à partir des ouvriers affectés. Votre saisie sera gardée sur l\'appareil et envoyée au retour du réseau.</div><div class="table-wrap" id="feuille">');
   page(html);
 
   $('#sel').onchange = (e) => { location.hash = '#/pointage' + qs(Object.fromEntries(new FormData(e.currentTarget))); };
@@ -515,13 +650,28 @@ route(/^\/pointage$/, async (p) => {
   if ($('#enregistrer')) $('#enregistrer').onclick = async (e) => {
     e.target.disabled = true;
     try {
+      const versions = new Map(f.lignes.map((l) => [l.ouvrier_id, l.version ?? null]));
       const lignesSaisies = $$('.pointage-ligne:not(.verrou)').map((row) => ({
         ouvrier_id: Number(row.dataset.ouvrier), presence: row.dataset.presence,
         heures_normales: $('[name=hn]', row).value, heures_sup: $('[name=hs]', row).value, observation: $('[name=obs]', row).value,
+        version: versions.get(Number(row.dataset.ouvrier)) ?? null,
       }));
       if (!lignesSaisies.length) { toast('Toutes les lignes sont déjà validées.'); return; }
-      const r = await api('PUT', `/chantiers/${chId}/pointage`, { date: jour, lignes: lignesSaisies });
-      toast(`${r.enregistrees} ligne(s) enregistrée(s).${r.ignorees.length ? ` ${r.ignorees.length} ignorée(s) (déjà validées).` : ''}`);
+      if (!HorsLigne.disponible) {
+        const r = await api('PUT', `/chantiers/${chId}/pointage`, { date: jour, lignes: lignesSaisies });
+        toast(`${r.enregistrees} ligne(s) enregistrée(s).${r.ignorees.length ? ` ${r.ignorees.length} ignorée(s) (déjà validées).` : ''}${r.conflits.length ? ` ${r.conflits.length} en conflit.` : ''}`, r.conflits.length > 0);
+        rafraichir();
+        return;
+      }
+      // Toujours écrit d'abord sur l'appareil, puis envoyé : rien n'est perdu si le réseau coupe
+      const ch = chantiers.find((c) => String(c.id) === String(chId));
+      await HorsLigne.ajouter({ userId: state.moi.utilisateur.id, chantierId: Number(chId), chantierCode: ch ? ch.code : String(chId), date: jour, lignes: lignesSaisies });
+      const b = await synchroniserFile({ silencieux: true });
+      if (b.hors_ligne || !navigator.onLine) toast('Pas de réseau : pointage gardé sur l\'appareil. Il sera envoyé automatiquement au retour de la connexion.');
+      else if (b.connexion_requise) toast('Pointage gardé sur l\'appareil. Reconnectez-vous pour l\'envoyer.', true);
+      else if (b.conflits || b.echecs) toast(`Pointage envoyé avec ${b.conflits + b.echecs} ligne(s) à revoir : voir « Synchronisation ».`, true);
+      else if (b.reste) toast('Pointage gardé sur l\'appareil, envoi en attente.', true);
+      else toast('Pointage enregistré.');
       rafraichir();
     } catch (err) { toast(err.message, true); } finally { e.target.disabled = false; }
   };
